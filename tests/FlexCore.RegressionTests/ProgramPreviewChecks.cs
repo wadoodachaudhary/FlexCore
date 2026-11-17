@@ -52,11 +52,13 @@ internal static class ProgramPreviewChecks
                 ["ShowInstructions"] = false
             }));
             var shell = components.OfType<ConverterShell>().Last();
-            check(shellRoot.ToHtmlString().Contains("Run / Preview") && shellRoot.ToHtmlString().Contains("data-mode=\"SingleFile\""), "enabling run preview adds the mode without selecting it");
+            var editorHtml = shellRoot.ToHtmlString();
+            check(editorHtml.Contains("Run / Preview") && editorHtml.Contains("data-mode=\"SingleFile\""), "enabling run preview adds the mode without selecting it");
+            check(editorHtml.Contains("fx-converter-panes") && editorHtml.Contains("data-orientation=\"vertical\""), "converter editors stack vertically by default");
             await shell.SetModeAsync(ConverterShellMode.RunPreview);
             var previewHtml = shellRoot.ToHtmlString();
             check(shell.EffectiveMode == ConverterShellMode.RunPreview && previewHtml.Contains("data-mode=\"RunPreview\""), "run preview mode replaces the editors");
-            check(previewHtml.Contains("Left program") && previewHtml.Contains("Right program") && previewHtml.Contains(">Start<") && previewHtml.Contains(">Stop<"), "the shell hosts the side-by-side preview");
+            check(previewHtml.Contains("Left program") && previewHtml.Contains("Right program") && previewHtml.Contains(">Start<") && previewHtml.Contains(">Stop<") && previewHtml.Contains("data-orientation=\"vertical\""), "the shell hosts the stacked preview");
             check(previewHtml.Contains("data-owner=\"user-42\""), "run preview keeps the signed-in owner");
             check(previewHtml.Contains("AddFlexCoreProgramPreview") && !previewHtml.Contains("Your input code here"), "a preview without the host service explains how to register it");
         });
@@ -113,6 +115,7 @@ internal static class ProgramPreviewChecks
                 && groupHtml.Contains("C&#x2B;&#x2B;", StringComparison.Ordinal)
                 && groupHtml.Contains("Python", StringComparison.Ordinal)
                 && groupHtml.Contains("Blazor", StringComparison.Ordinal)
+                && groupHtml.Contains("data-orientation=\"vertical\"", StringComparison.Ordinal)
                 && groupHtml.Split(">Start<").Length == 2, "a preview group mixes GUI, console, and web under one toolbar");
             var classic = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
             {
@@ -200,7 +203,18 @@ internal static class ProgramPreviewChecks
                 && pairHtml.Contains("fx-preview-chrome-browser", StringComparison.Ordinal)
                 && pairHtml.Contains(">W<", StringComparison.Ordinal)
                 && pairHtml.Contains(">B<", StringComparison.Ordinal)
+                && pairHtml.Contains("data-orientation=\"vertical\"", StringComparison.Ordinal)
                 && pairHtml.Split(">Start<").Length == 2, "a pair can frame each side differently");
+            var horizontal = (await uiRenderer.RenderComponentAsync<ProgramPreviewPair>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Orientation"] = ProgramPreviewOrientation.Horizontal,
+                ["SourceLabel"] = "Left",
+                ["TargetLabel"] = "Right",
+                ["SourceLaunch"] = new ProgramLaunch { FileName = "echo" },
+                ["TargetLaunch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(horizontal.Contains("data-orientation=\"horizontal\"", StringComparison.Ordinal)
+                && !horizontal.Contains("data-orientation=\"vertical\"", StringComparison.Ordinal), "a pair can keep the horizontal row");
             await window.DisposeAsync();
             await webWindow.DisposeAsync();
         });

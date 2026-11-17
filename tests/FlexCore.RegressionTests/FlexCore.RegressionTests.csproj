@@ -11,5 +11,6 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../../FlexCore.csproj" />
     <ProjectReference Include="..\..\FlexCore.Documents\FlexCore.Documents.csproj" />
+    <ProjectReference Include="..\..\FlexCore.Migration\FlexCore.Migration.csproj" />
   </ItemGroup>
 </Project>

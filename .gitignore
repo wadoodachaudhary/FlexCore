@@ -63,7 +63,7 @@ coverage*.info
 ## AI / editor tooling
 .claude/
 .codex-backups/
-.flexkit-sync-revert-*/
+.*-revert-*/
 
 # Serilog output — never committed.
 Logs/

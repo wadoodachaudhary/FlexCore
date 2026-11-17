@@ -23,6 +23,13 @@ public sealed class RptToXmlConverter
     }
 
     /// <summary>
+    /// How long one conversion may run before it is stopped with a <see cref="TimeoutException"/>.
+    /// Conversions run one at a time, so a file that cannot be converted in this time must not keep
+    /// every other conversion waiting. Default one minute.
+    /// </summary>
+    public TimeSpan ConversionTimeout { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
     /// Converts one .rpt file and overwrites <paramref name="xmlPath"/>.
     /// </summary>
     public async Task ConvertAsync(string rptPath, string xmlPath, CancellationToken cancellationToken = default)
@@ -98,7 +105,8 @@ public sealed class RptToXmlConverter
             outputPath,
             new CrystalRptConversionOptions(
                 ExtractSubreports: true,
-                Progress: message => _logger.LogDebug("RptToXml: {Message}", message)),
+                Progress: message => _logger.LogDebug("RptToXml: {Message}", message),
+                Timeout: ConversionTimeout),
             cancellationToken).ConfigureAwait(false);
 
         if (!File.Exists(outputPath))

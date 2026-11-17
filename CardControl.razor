@@ -1,6 +1,7 @@
 @namespace Fx.ControlKit
 @inherits FlexControlBase
 
+<CascadingValue Value="@(GetOrCreateChildLocation("Card", () => Title))" IsFixed="true">
 <div class="fx-card @(Elevation > 0 ? $"fx-card-elevation-{Elevation}" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
     @if (HeaderContent != null || !string.IsNullOrEmpty(Title))
     {
@@ -38,6 +39,7 @@
         </div>
     }
 </div>
+</CascadingValue>
 
 @code {
     [Parameter] public string? Subtitle { get; set; }

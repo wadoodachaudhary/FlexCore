@@ -27,7 +27,7 @@ public sealed class LlmPricing : ILlmPricing
 
     private static readonly HashSet<string> LocalProviders = new(StringComparer.OrdinalIgnoreCase)
     {
-        ProviderKeys.Ollama, ProviderKeys.OllamaCloud,
+        ProviderKeys.Ollama, ProviderKeys.OllamaCloud, ProviderKeys.Local,
     };
 
     private static readonly Dictionary<string, ModelPrice> PricesByPrefix = new(StringComparer.OrdinalIgnoreCase)

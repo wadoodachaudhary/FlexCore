@@ -4,7 +4,7 @@
     @for(var i=0;i<Steps.Count;i++)
     {
         var index=i;var step=Steps[i];
-        <ButtonControl @ref="_buttons[index]" @onkeydown="e=>KeyAsync(e,index)" Disabled="@(!CanSelect(index))" OnClick="()=>SelectAsync(index)" aria-current="@(Value==index?"step":null)" Title="@step.Description">
+        <ButtonControl @ref="_buttons[index]" @onkeydown="e=>KeyAsync(e,index)" CssClass="@(Value==index?"fx-step fx-step-current":"fx-step")" Disabled="@(!CanSelect(index))" OnClick="()=>SelectAsync(index)" aria-current="@(Value==index?"step":null)" Title="@step.Description">
             @if(StepTemplate!=null){@StepTemplate(new(){Step=step,StepIndex=index,IsFirst=index==0,IsLast=index==Steps.Count-1})}
             else{<span>@(index+1). @step.Title</span>}
             @if(InvalidSteps.Contains(index)){<span aria-label="Invalid step"> ⚠</span>}
@@ -36,7 +36,9 @@
         }
     }
     private bool _changing;
-    private bool CanSelect(int index)=>Enabled&&!_changing&&index>=0&&index<Steps.Count&&!DisabledSteps.Contains(index)&&(!Linear||index<=Value+1)&&(!Linear||index<=Value||!InvalidSteps.Contains(Value));
+    // Linear mode reaches one step ahead. A disabled step does not count as that step, or the stepper would be stuck in front of it.
+    private int NextOpen{get{for(var i=Value+1;i<Steps.Count;i++)if(!DisabledSteps.Contains(i))return i;return Value;}}
+    private bool CanSelect(int index)=>Enabled&&!_changing&&index>=0&&index<Steps.Count&&!DisabledSteps.Contains(index)&&(!Linear||index<=NextOpen)&&(!Linear||index<=Value||!InvalidSteps.Contains(Value));
     public async Task SelectAsync(int index)
     {
         if(index==Value||!CanSelect(index))return;

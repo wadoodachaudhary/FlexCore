@@ -39,6 +39,8 @@ public partial class PivotControl<TValue>
 
     /// <summary>Optional field labels: key = field name, value = display label.</summary>
     [Parameter] public Dictionary<string, string>? FieldLabels { get; set; }
+    /// <summary>Optional axis grouping projection. It does not replace fields used by summary calculations.</summary>
+    [Parameter] public Func<TValue, string, object?>? GroupValueSelector { get; set; }
 
     private string ResolvedStyle => Style;
 
@@ -437,13 +439,13 @@ public partial class PivotControl<TValue>
                 rowspan: 2, cssClass: "fx-pivot-hdr-row", sortField: _effectiveRowFields[i], isSortable: AllowSorting));
 
         var groups = _valueColumns.Where(c => !c.IsTotal)
-            .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
+            .GroupBy(c => c.Key.IdentityPart(0))
             .ToList();
 
         foreach (var group in groups)
         {
             var items = group.ToList();
-            topLevel.Add(new HeaderCell(group.Key, colspan: items.Count, cssClass: "fx-pivot-hdr-colgroup"));
+            topLevel.Add(new HeaderCell(group.Key.ToString() ?? "", colspan: items.Count, cssClass: "fx-pivot-hdr-colgroup"));
             foreach (var item in items)
             {
                 var leafLabel = item.Key.Parts.Count > 1
@@ -513,22 +515,22 @@ public partial class PivotControl<TValue>
 
         // Group by first column field
         var topGroups = _valueColumns.Where(c => !c.IsTotal)
-            .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
+            .GroupBy(c => c.Key.IdentityPart(0))
             .ToList();
 
         foreach (var tg in topGroups)
         {
             var topItems = tg.ToList();
-            top.Add(new HeaderCell(tg.Key, colspan: topItems.Count, cssClass: "fx-pivot-hdr-colgroup"));
+            top.Add(new HeaderCell(tg.Key.ToString() ?? "", colspan: topItems.Count, cssClass: "fx-pivot-hdr-colgroup"));
 
             var midGroups = topItems
-                .GroupBy(c => c.Key.Parts.Count > 1 ? c.Key.Parts[1] : "")
+                .GroupBy(c => c.Key.IdentityPart(1))
                 .ToList();
 
             foreach (var mg in midGroups)
             {
                 var midItems = mg.ToList();
-                mid.Add(new HeaderCell(mg.Key, colspan: midItems.Count, cssClass: "fx-pivot-hdr-colgroup2"));
+                mid.Add(new HeaderCell(mg.Key.ToString() ?? "", colspan: midItems.Count, cssClass: "fx-pivot-hdr-colgroup2"));
                 foreach (var item in midItems)
                     bot.Add(new HeaderCell(item.ValueConfig.ShortLabel,
                         cssClass: "fx-pivot-hdr-value", sortField: item.Field, isSortable: AllowSorting));
@@ -555,7 +557,7 @@ public partial class PivotControl<TValue>
     private void BuildGroupedRows(List<TValue> allRows, List<IGrouping<PivotKey, TValue>> rowGroups)
     {
         var firstFieldGroups = rowGroups
-            .GroupBy(rg => rg.Key.Parts.Count > 0 ? rg.Key.Parts[0] : "")
+            .GroupBy(rg => rg.Key.IdentityPart(0))
             .ToList();
 
         foreach (var group in firstFieldGroups)
@@ -571,7 +573,7 @@ public partial class PivotControl<TValue>
                 if (isFirstInGroup)
                 {
                     var span = ShowSubTotals ? groupRows.Count + 1 : groupRows.Count;
-                    cells.Add(new PivotDisplayCell(group.Key, cssClass: "fx-pivot-cell-rowgroup", rowspan: span));
+                    cells.Add(new PivotDisplayCell(group.Key.ToString() ?? "", cssClass: "fx-pivot-cell-rowgroup", rowspan: span));
                     isFirstInGroup = false;
                 }
                 else
@@ -847,7 +849,7 @@ public partial class PivotControl<TValue>
 
     private PivotKey BuildKey(TValue item, IReadOnlyList<string> fields)
     {
-        var values = fields.Select(f => GetValue(item!, f)).ToArray();
+        var values = fields.Select(f => GroupValueSelector is null ? GetValue(item!, f) : GroupValueSelector(item, f)).ToArray();
         var parts = values.Select(value => Convert.ToString(value, CultureInfo.CurrentCulture) ?? "").ToArray();
         return new PivotKey(string.Join(" / ", parts), parts, values);
     }
@@ -923,6 +925,8 @@ public partial class PivotControl<TValue>
         return table;
     }
 
+    internal IReadOnlyList<string> ExportColumnPath(int valueColumn) => _valueColumns[valueColumn].Key.Parts;
+
     internal IReadOnlyList<TValue> ExportCellRows(int row, int column, int rowSpan, int columnSpan)
     {
         var result = new HashSet<TValue>();
@@ -935,6 +939,75 @@ public partial class PivotControl<TValue>
                     result.Add(item);
         }
         return DataSource.Where(result.Contains).ToArray();
+    }
+
+    internal object? ExportCellValue(int row, int column)
+    {
+        var valueColumn = _valueColumns[column - _effectiveRowFields.Count];
+        return Aggregate(ExportCellRows(row, column, 1, 1), valueColumn.ValueConfig);
+    }
+
+    /// <summary>A shown value cell's aggregate, as the pivot computed it for display.</summary>
+    internal object? ExportShownValue(int row, int column)
+    {
+        var cells = _displayRows[row].Cells;
+        return cells[cells.Count - _valueColumns.Count + column - _effectiveRowFields.Count].RawValue;
+    }
+
+    /// <summary>A value column's total over every pivot record, whichever rows are shown.</summary>
+    internal object? ExportColumnTotal(int column)
+    {
+        var valueColumn = _valueColumns[column - _effectiveRowFields.Count];
+        return Aggregate(GetFilteredData().Where(item => valueColumn.IsTotal || _effectiveColumnFields.Count == 0
+            || BuildKey(item!, _effectiveColumnFields).Equals(valueColumn.Key)), valueColumn.ValueConfig);
+    }
+
+    // Structured axes keep typed group identities for grid formulas and nested subtotals.
+    internal IReadOnlyList<PivotExportAxis> ExportAxis(bool column, bool subtotals)
+    {
+        var fields = column ? _effectiveColumnFields : _effectiveRowFields;
+        var keys = GetFilteredData().Select(item => BuildKey(item, fields)).Distinct()
+            .OrderBy(key => key, Comparer<PivotKey>.Create((a, b) => CompareKeys(a, b, fields))).ToArray();
+        var result = new List<PivotExportAxis>();
+        void Visit(IEnumerable<PivotKey> source, int depth)
+        {
+            if (depth == fields.Count)
+            {
+                var key = source.First();
+                result.Add(new(key.RawParts.ToArray(), key.Parts.ToArray(), false));
+                return;
+            }
+            foreach (var group in source.GroupBy(key => key.IdentityPart(depth)))
+            {
+                Visit(group, depth + 1);
+                if (subtotals && depth + 1 < fields.Count)
+                {
+                    var key = group.First();
+                    result.Add(new(key.RawParts.Take(depth + 1).ToArray(), key.Parts.Take(depth + 1).ToArray(), true));
+                }
+            }
+        }
+        if (keys.Length > 0) Visit(keys, 0);
+        if (ShowGrandTotals) result.Add(new([], [], true));
+        return result;
+    }
+
+    internal object? ExportAxisValue(PivotExportAxis row, PivotExportAxis column, int summary)
+    {
+        if (summary < 0 || summary >= _effectiveValueFields.Count) throw new InvalidDataException("Pivot summary index is out of range.");
+        return Aggregate(ExportAxisRows(row, column), _effectiveValueFields[summary]);
+    }
+
+    internal IEnumerable<TValue> ExportAxisRows(PivotExportAxis row, PivotExportAxis column)
+    {
+        bool Matches(TValue item, IReadOnlyList<string> fields, PivotExportAxis axis)
+        {
+            if (axis.Path.Count == 0) return true;
+            var key = BuildKey(item, fields);
+            var prefix = new PivotKey("", axis.Labels, axis.Path);
+            return Enumerable.Range(0, axis.Path.Count).All(i => Equals(key.IdentityPart(i), prefix.IdentityPart(i)));
+        }
+        return GetFilteredData().Where(item => Matches(item, _effectiveRowFields, row) && Matches(item, _effectiveColumnFields, column));
     }
 
     private static IEnumerable<object?> FlattenPivotExportRow(
@@ -978,15 +1051,16 @@ public partial class PivotControl<TValue>
         public PivotKey(string display, IReadOnlyList<string> parts, IReadOnlyList<object?>? rawParts = null)
         { Display = display; Parts = parts; RawParts = rawParts ?? parts.Cast<object?>().ToArray(); }
         public IReadOnlyList<object?> RawParts { get; }
+        public object IdentityPart(int index) => index >= Parts.Count ? "" : RawParts[index] is PivotGroupValue group ? group : Parts[index];
         public static readonly PivotKey Empty = new("", Array.Empty<string>());
         public string Display { get; }
         public IReadOnlyList<string> Parts { get; }
         public override bool Equals(object? obj) =>
-            obj is PivotKey other && Parts.SequenceEqual(other.Parts, StringComparer.Ordinal);
+            obj is PivotKey other && Parts.Count == other.Parts.Count && Enumerable.Range(0, Parts.Count).All(i => Equals(IdentityPart(i), other.IdentityPart(i)));
         public override int GetHashCode()
         {
             var hash = new HashCode();
-            foreach (var p in Parts) hash.Add(p, StringComparer.Ordinal);
+            for (var i = 0; i < Parts.Count; i++) hash.Add(IdentityPart(i));
             return hash.ToHashCode();
         }
     }
@@ -1035,6 +1109,8 @@ public partial class PivotControl<TValue>
         public string? SelectedValue { get; set; }
     }
 }
+
+internal sealed record PivotExportAxis(IReadOnlyList<object?> Path, IReadOnlyList<string> Labels, bool IsTotal);
 
 /// <summary>Configuration for a single value field in the pivot.</summary>
 public class PivotValueConfig

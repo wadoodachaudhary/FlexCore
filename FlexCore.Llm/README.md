@@ -321,6 +321,28 @@ var recent = sp.GetRequiredService<InMemoryCallLog>().Recent;
 
 Records carry sizes and ids only — never prompt or response text.
 
+## Code tools
+
+`Fx.ControlKit.Llm.CodeTools` is the service layer Mutarjim and other hosts call.
+It does not reference Blazor. Register it after the client:
+
+```csharp
+builder.Services.AddFlexCoreLlm(builder.Configuration);
+builder.Services.AddFlexCoreCodeTools(builder.Configuration);
+```
+
+`Llm:CodeTools:Model` is `provider:model`. Keys stay in the provider environment
+variables. A local Ollama daemon counts only when `AllowImplicitOllama` is true
+or `Llm:Ollama` sets an endpoint, key, or model. With nothing configured,
+`RunAsync` returns `CodeToolStatus.NotConfigured` and the setup message.
+
+Tools: Explainer, Generator, Assistant, Enhancer, Comment Generator,
+Documentation Generator, Unit Test Generator, Reviewer, Optimizer, Diagram
+Generator, Diagram to Code, and Chat (`OpenChat`). Class diagrams from C# or
+Python can be drawn with `StructuralClassDiagram.TryCreate` when no model is
+configured. The Blazor pages, the shell, and the snippet sandbox are documented
+in `docs/app-shell-and-code-tools.md`.
+
 ## Adding a provider
 
 Derive from `LlmProviderBase` (or implement `ILlmProvider` directly), report

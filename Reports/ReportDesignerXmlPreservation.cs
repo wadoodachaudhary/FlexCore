@@ -15,6 +15,7 @@ public static partial class ReportDesignerXmlSerializer
         {
             var created = BuildSourceDocument(document);
             ApplySelectionMetadata(created.Root!, document);
+            ApplySqlResultFields(created.Root!, document);
             if (!string.IsNullOrWhiteSpace(document.CustomSql))
                 EnsureChild(EnsureChild(created.Root!, MetadataElementName), "Sql").SetAttributeValue("Query", document.CustomSql);
             return created;
@@ -28,6 +29,8 @@ public static partial class ReportDesignerXmlSerializer
         var sources = document.SourceItems.Concat(document.SourceSections).Concat(document.SourceObjects)
             .ToDictionary(pair => pair.Key, pair => nodes[pair.Value], StringComparer.Ordinal);
 
+        ApplyDrillHeaderOption(root);
+        ApplySqlResultFields(root, document);
         if (document.Title != before.Title)
             EnsureChild(root, "Summaryinfo").SetAttributeValue("ReportTitle", document.Title);
         PatchChild(root, BuildPrintOptions(before.Page), BuildPrintOptions(document.Page));
@@ -126,7 +129,7 @@ public static partial class ReportDesignerXmlSerializer
             if (XNode.DeepEquals(oldChild, child))
                 continue;
             // Ordered text runs are an atomic authoring payload, not named XML properties.
-            if (name.LocalName is "FlexKitVisual" or "FlexKitAnalysis")
+            if (name.LocalName is "FlexKitVisual" or "FlexKitAnalysis" or "FlexKitChartMarker")
             {
                 target.Element(name)?.Remove();
                 if (child is not null) target.Add(new XElement(child));
@@ -248,12 +251,13 @@ public static partial class ReportDesignerXmlSerializer
         var managed = before.Links.Where(link => sources.ContainsKey(link.Id)).Select(link => sources[link.Id]).Distinct().ToList();
         var desired = new List<XElement>();
         foreach (var links in after.Links.GroupBy(link => (
-            Source: after.SourceItems.GetValueOrDefault(link.Id), link.LeftTable, link.RightTable, link.JoinType)))
+            Source: after.SourceItems.GetValueOrDefault(link.Id), link.LeftTable, link.RightTable, link.JoinType, link.Comparison)))
         {
             // OriginalDesign is a value snapshot; source XML is owned by the live document.
             var originalXml = links.Select(link => after.SourceItems.GetValueOrDefault(link.Id)).FirstOrDefault(node => node is not null);
             var node = originalXml is null ? new XElement("TableLink") : new XElement(originalXml);
             node.SetAttributeValue("JoinType", ToCrystalJoinType(links.Key.JoinType));
+            node.SetAttributeValue("Comparison", links.Key.Comparison == "=" ? null : links.Key.Comparison);
             var sourceFields = new List<XElement>();
             var destinationFields = new List<XElement>();
             foreach (var link in links)
@@ -394,6 +398,32 @@ public static partial class ReportDesignerXmlSerializer
         TimeSpan time => $"Time({time.Hours}, {time.Minutes}, {time.Seconds})",
         _ => "\"" + value.ToString()!.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
     };
+
+    private const string DrillHeaderAttribute = "ShowAllHeadersOnDrillDown";
+
+    /// <summary>A new report's options, with ShowAllHeadersOnDrillDown off as in Crystal.</summary>
+    private static XElement NewReportOptions() => new("ReportOptions", new XAttribute(DrillHeaderAttribute, "false"));
+
+    // Native drill-down follows the main report's ShowAllHeadersOnDrillDown option. A source written before converters recorded it
+    // (or by the designer before it wrote it) gains Crystal's default for a new report; an authored value is kept. A converter's
+    // subreport definition carries the version stamp and either no ReportOptions or, from version 16, ReportOptions holding only
+    // its own select-distinct flag: the drill option belongs to the main report, so a subreport is left alone.
+    private static void ApplyDrillHeaderOption(XElement root)
+    {
+        if (root.Element("ReportOptions") is { } options)
+        {
+            // From the drill-option version on, the converter always writes it on the main report, so a stamped definition without it is a subreport.
+            var version = int.TryParse((string?)root.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var stored) ? stored : 0;
+            if (options.Attribute(DrillHeaderAttribute) is null && version < NativeCrystal.CrystalReportXmlVersion.DrillHeaderOption)
+                options.SetAttributeValue(DrillHeaderAttribute, "false");
+            return;
+        }
+        if (root.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null) return;
+        if (Child(root, "PrintOptions") is { } print) print.AddBeforeSelf(NewReportOptions());
+        else if (Child(root, "Summaryinfo") is { } summary) summary.AddAfterSelf(NewReportOptions());
+        else root.AddFirst(NewReportOptions());
+    }
 
     private static void ApplySelectionMetadata(XElement root, ReportDesignerDocument document)
     {

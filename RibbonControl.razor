@@ -20,17 +20,43 @@
 *@
 
 <CascadingValue Value="this" IsFixed="true">
-    <div class="fx-ribbon @CssClass">
-        <div class="fx-ribbon-tabs">
+    <div class="fx-ribbon @(_collapsed ? "fx-ribbon-collapsed" : "") @CssClass">
+        @* The strip is a tablist with one Tab stop: the open tab. Left, Right, Home and End move between tabs. *@
+        <div class="fx-ribbon-tabs" role="tablist">
+            @{ var active = ResolveActive(); }
             @foreach (var tab in _tabs)
             {
                 var t = tab;
-                <div class="fx-ribbon-tab-btn @(t == _activeTab ? "active" : "")"
-                     @onclick="() => ActivateTab(t)">@t.Title</div>
+                if (!t.Visible) { continue; }
+                <button type="button"
+                        role="tab"
+                        id="@TabId(t)"
+                        class="fx-ribbon-tab-btn @(t == active ? "active" : "")"
+                        aria-selected="@(t == active ? "true" : "false")"
+                        aria-controls="@PanelId(t)"
+                        tabindex="@(t == active ? 0 : -1)"
+                        disabled="@t.Disabled"
+                        @ref="_tabElements[t]"
+                        @onclick="() => ActivateTab(t)"
+                        @ondblclick="OnTabDoubleClickAsync"
+                        @onkeydown="OnTabKeyDown">@t.Title</button>
+            }
+            @if (Collapsible)
+            {
+                <button type="button"
+                        class="fx-ribbon-collapse"
+                        aria-expanded="@(_collapsed ? "false" : "true")"
+                        title="@(_collapsed ? "Show the ribbon" : "Hide the ribbon")"
+                        aria-label="@(_collapsed ? "Show the ribbon" : "Hide the ribbon")"
+                        @onclick="ToggleCollapsedAsync">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
             }
         </div>
         <div class="fx-ribbon-body">
-            @* Children render all tabs; CSS hides non-active ones *@
+            @* Only the open tab renders its groups (RibbonTab); a collapsed ribbon keeps this element and hides it in CSS. *@
             @ChildContent
         </div>
     </div>
@@ -43,8 +69,33 @@
     /// <summary>Optional CSS class for the outer container.</summary>
     [Parameter] public string CssClass { get; set; } = "";
 
+    /// <summary>Shows a button at the end of the tab strip that hides and shows the ribbon's body; a double-click on a tab does the same.</summary>
+    [Parameter] public bool Collapsible { get; set; }
+
+    /// <summary>Whether the body is hidden. Two-way with <c>@bind-Collapsed</c>. Read only when <see cref="Collapsible"/> is true.</summary>
+    [Parameter] public bool Collapsed { get; set; }
+
+    /// <summary>Fires when the user hides or shows the body.</summary>
+    [Parameter] public EventCallback<bool> CollapsedChanged { get; set; }
+
     internal List<RibbonTab> _tabs = new();
     internal RibbonTab? _activeTab;
+
+    private readonly string _uid = "fxr" + Guid.NewGuid().ToString("N")[..8];
+    private readonly Dictionary<RibbonTab, ElementReference> _tabElements = new();
+    private RibbonTab? _focusTab;
+    private bool _collapsed, _collapsedSeen;
+
+    internal string TabId(RibbonTab tab) => $"{_uid}-t{_tabs.IndexOf(tab)}";
+    internal string PanelId(RibbonTab tab) => $"{_uid}-p{_tabs.IndexOf(tab)}";
+
+    protected override void OnParametersSet()
+    {
+        // The working state is a field, so a one-way Collapsed does not undo what the user did.
+        if (!Collapsible) { _collapsed = false; _collapsedSeen = false; return; }
+        if (Collapsed != _collapsedSeen) { _collapsed = Collapsed; }
+        _collapsedSeen = Collapsed;
+    }
 
     internal void RegisterTab(RibbonTab tab)
     {
@@ -54,11 +105,73 @@
         StateHasChanged();
     }
 
+    /// <summary>A tab's title, visibility or disabled state changed: redraw the strip.</summary>
+    internal void TabChanged() => StateHasChanged();
+
     internal bool IsActive(RibbonTab tab) => _activeTab == tab;
 
-    private void ActivateTab(RibbonTab tab)
+    // A hidden or disabled tab cannot stay open: the first tab that can be opened takes over.
+    private RibbonTab? ResolveActive()
     {
+        if (_activeTab is null || !_activeTab.Visible || _activeTab.Disabled)
+        {
+            _activeTab = _tabs.FirstOrDefault(t => t.Visible && !t.Disabled);
+        }
+        return _activeTab;
+    }
+
+    private async Task ActivateTab(RibbonTab tab)
+    {
+        if (!tab.Visible || tab.Disabled) return;
         _activeTab = tab;
-        StateHasChanged();
+        if (_collapsed)
+        {
+            _collapsed = false;
+            _expandedByClick = DateTime.UtcNow;
+            await CollapsedChanged.InvokeAsync(false);
+        }
+    }
+
+    // A double-click arrives as click, click, double-click. When the first click has just shown a hidden ribbon, the
+    // double-click must not hide it again.
+    private DateTime _expandedByClick;
+
+    private Task OnTabDoubleClickAsync() =>
+        (DateTime.UtcNow - _expandedByClick).TotalMilliseconds < 800 ? Task.CompletedTask : ToggleCollapsedAsync();
+
+    private async Task ToggleCollapsedAsync()
+    {
+        if (!Collapsible) return;
+        _collapsed = !_collapsed;
+        await CollapsedChanged.InvokeAsync(_collapsed);
+    }
+
+    private async Task OnTabKeyDown(KeyboardEventArgs e)
+    {
+        var open = _tabs.Where(t => t.Visible && !t.Disabled).ToList();
+        if (open.Count == 0) return;
+        var index = _activeTab is null ? -1 : open.IndexOf(_activeTab);
+        var next = e.Key switch
+        {
+            "ArrowRight" => (index + 1) % open.Count,
+            "ArrowLeft" => (index - 1 + open.Count) % open.Count,
+            "Home" => 0,
+            "End" => open.Count - 1,
+            _ => -1,
+        };
+        if (next < 0 || open[next] == _activeTab) return;
+        _focusTab = open[next];
+        await ActivateTab(open[next]);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusTab is null) return;
+        var tab = _focusTab;
+        _focusTab = null;
+        if (_tabElements.TryGetValue(tab, out var element))
+        {
+            try { await element.FocusAsync(); } catch { /* the element left the page */ }
+        }
     }
 }

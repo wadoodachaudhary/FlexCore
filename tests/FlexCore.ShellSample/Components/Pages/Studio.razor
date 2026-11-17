@@ -1,0 +1,190 @@
+@page "/"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ICodeToolService Tools
+
+<PageTitle>@_title</PageTitle>
+
+<AppShell Brand="CodeConvert"
+          WorkspaceLabel="Your Workspace"
+          WorkspaceName="Personal"
+          Sections="@_sections"
+          ActiveItemId="@_active"
+          ActiveItemIdChanged="Open"
+          Theme="@_theme"
+          Plan="@_plan"
+          FooterItems="@_footer"
+          OnPlanAction="Open">
+    <Banner>
+        <span>You have CodeConvert Pro Plan access.</span>
+        <button type="button" class="theme-toggle" @onclick="ToggleTheme">@(_theme == ShellTheme.Dark ? "Light theme" : "Dark theme")</button>
+    </Banner>
+    <ChildContent>
+        @if (_active == "home")
+        {
+            <ShellHome Title="Home"
+                       Subtitle="Access powerful AI tools to convert, explain, and generate code in one place."
+                       Cards="@ShellToolCatalog.GetStarted"
+                       Pinned="@_pinned"
+                       PinnedSubtitle="Your pinned tools for quick access."
+                       Popular="@_popular"
+                       PopularSubtitle="Explore some of the most frequently used tools by our community."
+                       OnCardAction="Open"
+                       OnTileSelected="OpenTile" />
+            <ShellToolGrid Title="Tools" Tools="@ShellToolCatalog.Menu" ActiveId="@_active" OnSelect="Open" />
+        }
+        else if (_active == "converter")
+        {
+            <h1>Code Converter</h1>
+            <p class="lead">This is FlexCore's ConverterShell. The migration steps sit under it in the sidebar.</p>
+            <ConverterShell SourceKinds="@_kinds" TargetKinds="@_kinds" SourceKindId="python" TargetKindId="csharp" />
+        }
+        else if (StepLabel(_active) is { } step)
+        {
+            <h1>@step</h1>
+            <p class="lead">This step is a sidebar option. Upload, Inventory, Convert, TODO, and Run are no longer a row of buttons.</p>
+        }
+        else if (_active == "runner")
+        {
+            <CodeRunnerPage Service="@Tools" Language="python" Code="@_runner" />
+        }
+        else if (_active == "chat")
+        {
+            <CodeChatPanel Service="@Tools" />
+        }
+        else if (CodeToolMap.TryGetKind(_active, out var kind))
+        {
+            <CodeToolPage Tool="@kind"
+                          Service="@Tools"
+                          Code="@CodeFor(kind)"
+                          Language="@LanguageFor(kind)"
+                          Mermaid="@MermaidFor(kind)"
+                          TargetLanguage="csharp"
+                          PreferOffline="@(kind == CodeToolKind.DiagramGenerator)"
+                          AutoRun="@AutoRun(kind)"
+                          Files="@FilesFor(kind)" />
+        }
+        else
+        {
+            <h1>@_title</h1>
+            <p class="lead">This item is part of the shell. The host decides what it opens.</p>
+        }
+    </ChildContent>
+</AppShell>
+
+@code {
+    private ShellTheme _theme = ShellTheme.Light;
+    private string _active = "home";
+    private readonly ShellPlan _plan = new()
+    {
+        Title = "Pro Plan",
+        Message = "Upgrade to Premium for the best usage limits!",
+        ActionLabel = "Upgrade Plan",
+        ActionId = "account"
+    };
+    private readonly IReadOnlyList<ShellNavItem> _footer =
+    [
+        ShellNav.Item("billing", "Plans & Billing", ShellIcon.Billing),
+        ShellNav.Item("account", "Account", ShellIcon.Account)
+    ];
+    private readonly IReadOnlyList<ShellNavSection> _sections = ShellToolCatalog.CreateSidebar(
+        ShellToolCatalog.ConverterWithSteps(
+            ShellWizard.Step(1, "upload", "Upload", ShellStepState.Done),
+            ShellWizard.Step(2, "inventory", "Inventory", ShellStepState.Done),
+            ShellWizard.Step(3, "convert", "Convert", ShellStepState.Active),
+            ShellWizard.Step(4, "todo", "TODO", ShellStepState.Disabled),
+            ShellWizard.Step(5, "run", "Run", ShellStepState.Pending)));
+    private readonly IReadOnlyList<ConverterKind> _kinds =
+    [
+        new() { Id = "python", Label = "Python" },
+        new() { Id = "csharp", Label = "C#" },
+        new() { Id = "javascript", Label = "JavaScript" }
+    ];
+    private readonly IReadOnlyList<ShellToolTile> _pinned =
+    [
+        new() { Id = "ruby-explainer", Title = "Ruby Code Explainer", LanguageId = "ruby" },
+        new() { Id = "python-c", Title = "Python to C", SourceLanguageId = "python", TargetLanguageId = "c" },
+        new() { Id = "clojure-gen", Title = "Clojure Code Generator", LanguageId = "clojure" }
+    ];
+    private readonly IReadOnlyList<ShellToolTile> _popular =
+    [
+        new() { Id = "pop-py", Title = "Python Explainer", LanguageId = "python", ShowPin = false },
+        new() { Id = "pop-cs", Title = "C# Generator", LanguageId = "csharp", ShowPin = false },
+        new() { Id = "pop-js", Title = "JavaScript to TypeScript", SourceLanguageId = "javascript", TargetLanguageId = "typescript", ShowPin = false }
+    ];
+
+    private const string ExplainerCode = """
+        public static int Score(int[] values)
+        {
+            var best = int.MinValue;
+            for (var i = 0; i < values.Length; i++)
+                for (var j = i; j < values.Length; j++)
+                {
+                    var sum = 0;
+                    for (var k = i; k <= j; k++) sum += values[k];
+                    if (sum > best) best = sum;
+                }
+            return best;
+        }
+        """;
+
+    private const string DiagramCode = """
+        public class Order
+        {
+            public int Id { get; set; }
+            public string Customer { get; set; } = "";
+            public List<OrderLine> Lines { get; set; } = new();
+            public decimal Total() => 0;
+        }
+
+        public class OrderLine
+        {
+            public string Sku { get; set; } = "";
+            public int Quantity { get; set; }
+        }
+        """;
+
+    private string _title => ShellToolCatalog.Find(_active)?.Title
+        ?? StepLabel(_active)
+        ?? (_active == "home" ? "Home" : _active);
+
+    private string _runner = "print('hello from the sandbox')\n";
+
+    private void Open(string? id)
+    {
+        if (string.IsNullOrEmpty(id) || id == "todo") return;
+        _active = id;
+    }
+
+    private void OpenTile(string id) => _active = id.Contains("python", StringComparison.Ordinal) ? "explainer" : "generator";
+
+    private void ToggleTheme() => _theme = _theme == ShellTheme.Dark ? ShellTheme.Light : ShellTheme.Dark;
+
+    private static string? StepLabel(string id) => id switch
+    {
+        "upload" => "1. Upload",
+        "inventory" => "2. Inventory",
+        "convert" => "3. Convert",
+        "run" => "5. Run",
+        _ => null
+    };
+
+    private static bool AutoRun(CodeToolKind kind) => kind is CodeToolKind.Explainer or CodeToolKind.DiagramGenerator;
+
+    private static string? CodeFor(CodeToolKind kind) => kind switch
+    {
+        CodeToolKind.Explainer => ExplainerCode,
+        CodeToolKind.DiagramGenerator => DiagramCode,
+        CodeToolKind.CommentGenerator or CodeToolKind.Enhancer or CodeToolKind.Reviewer or CodeToolKind.Optimizer or CodeToolKind.UnitTestGenerator or CodeToolKind.Assistant => DiagramCode,
+        _ => null
+    };
+
+    private static string LanguageFor(CodeToolKind kind) => "csharp";
+
+    private static string? MermaidFor(CodeToolKind kind) => kind == CodeToolKind.DiagramToCode
+        ? "classDiagram\n    class Order\n    Order --> OrderLine"
+        : null;
+
+    private static IReadOnlyList<CodeToolFile>? FilesFor(CodeToolKind kind) => kind == CodeToolKind.DocumentationGenerator
+        ? [new CodeToolFile("Order.cs", DiagramCode), new CodeToolFile("OrderLine.cs", "public class OrderLine { public string Sku { get; set; } = \"\"; }")]
+        : null;
+}

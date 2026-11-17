@@ -13,7 +13,7 @@ else
             @foreach(var key in Node.Panels)
             {
                 <span draggable="@Manager.Enabled" @ondragstart="()=>BeginDrag(key)" @ondragend="EndDrag">
-                    <ButtonControl Disabled="@(!Manager.Enabled)" role="tab" aria-selected="@(Active==key)" OnClick="()=>Manager.SelectAsync(Node.Id,key)">@Manager.Panel(key).Title</ButtonControl>
+                    <ButtonControl Disabled="@(!Manager.Enabled)" role="tab" aria-selected="@(Active==key ? "true" : "false")" OnClick="()=>Manager.SelectAsync(Node.Id,key)">@Manager.Panel(key).Title</ButtonControl>
                 </span>
             }
         </div>

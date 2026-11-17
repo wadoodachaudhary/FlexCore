@@ -50,6 +50,10 @@ public partial class GridControl<TValue>
             // Keep invalid typed dates visible to row validation as well as the
             // picker, so Enter/Save cannot silently save the previous date.
             builder.AddAttribute(19, "InputValueChanged", (Action<string?>)(value => SetRowEditProperty(field, value)));
+            // Each typed text is stored in the row as soon as it parses ("11/02" is a date), so the row's
+            // date changes while the user types; a re-seed from it would replace the draft under the caret.
+            // The editor is keyed per (item, field), so a new edit session already re-seeds it.
+            builder.AddAttribute(20, "Uncontrolled", true);
             builder.CloseComponent();
         }
         else

@@ -1,0 +1,18 @@
+Carlito 1.104 by Lukasz Dziedzic, distributed under SIL Open Font License 1.1.
+See OFL.txt for copyright, reserved font names and full license.
+
+Source: https://github.com/google/fonts/tree/07ace6abab87a122865e5cb82c7540b39551edb2/ofl/carlito
+Upstream: https://github.com/googlefonts/carlito
+The four original TTF faces were losslessly packaged as WOFF2 using fontTools.
+No glyphs, advance widths or font names were modified. No Microsoft fonts are distributed.
+
+ReportFontCatalog prefers an installed Calibri face; otherwise it uses Carlito,
+the upstream metric-compatible alternative. This substitution is disclosed in
+the report's runtime diagnostics. It does not promise identical GDI rasterization.
+The same embedded faces are used for browser measurement, preview and offline HTML.
+
+SHA256:
+Regular 061d116e1dd01e0b61356a1717711ac681e839c968b800cb8ee3a5eb4e73c905
+Bold 6cb112074d0b2da2223dd93beaec10660a9cf6fb02ea71dc36224ce2d18a7ed8
+Italic 4f6241e74e08ddba83b5bc1ec4b8b2033375ed9ff6dc424511d5dd9c336f5cc3
+BoldItalic 09944164ea569abe2bc19db633fee60ab2d2eb67a12c3740aec2116d611c45db

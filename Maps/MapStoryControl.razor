@@ -1,0 +1,84 @@
+@namespace Fx.ControlKit.Maps
+@inherits FlexControlBase
+
+<div class="fx-map-story @CssClass" style="@ResolvedStyle" id="@Id">
+    @if (Story is null)
+    {
+        <p role="status">No map story is loaded.</p>
+    }
+    else
+    {
+        <div class="fx-map-story-nav">
+            <ButtonControl OnClick="Back" Disabled="@(!Enabled || !_session.CanBack)" Title="Back to the previous map">Back</ButtonControl>
+            <nav aria-label="Map levels">
+                @for (var i = 0; i < _session.Path.Count; i++)
+                {
+                    var index = i;
+                    var crumb = _session.Path[i];
+                    var last = i == _session.Path.Count - 1;
+                    if (i > 0)
+                    {
+                        <span class="fx-map-story-sep" aria-hidden="true">›</span>
+                    }
+                    if (last)
+                    {
+                        <span class="fx-map-story-crumb current" aria-current="page">@crumb.Label</span>
+                    }
+                    else
+                    {
+                        <button type="button" class="fx-map-story-crumb" @onclick="() => Jump(index)">@crumb.Label</button>
+                    }
+                }
+            </nav>
+        </div>
+        <div class="fx-map-story-stage" @key="@(_session.Current.Id + ":" + _session.FocusId)">
+            <MapControl Choropleth="_layout" ShapeClick="OnShape" AriaLabel="@_layout.Title" Width="Width" Height="Height" Enabled="Enabled" />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public MapStory? Story { get; set; }
+    [Parameter] public MapGeographyCatalog? Geography { get; set; }
+    [Parameter] public int Width { get; set; } = 960;
+    [Parameter] public int Height { get; set; } = 640;
+
+    MapStory? _story;
+    MapStorySession _session = null!;
+    MapGeographyCatalog _geography = null!;
+    ChoroplethLayout _layout = null!;
+
+    protected override void OnParametersSet()
+    {
+        if (Story is null) return;
+        if (!ReferenceEquals(_story, Story))
+        {
+            _story = Story;
+            _session = new MapStorySession(Story);
+        }
+        _geography = Geography ?? MapGeographyCatalog.Bundled();
+        _layout = MapStoryComposer.Compose(Story, _session.Current, _geography, _session.FocusId, _session.FocusName, Width, Height);
+    }
+
+    Task OnShape(MapShape shape)
+    {
+        if (!Enabled || Story is null) return Task.CompletedTask;
+        if (_session.TryDrill(shape.Id, shape.Title))
+            _layout = MapStoryComposer.Compose(Story, _session.Current, _geography, _session.FocusId, _session.FocusName, Width, Height);
+        return Task.CompletedTask;
+    }
+
+    void Back()
+    {
+        if (Story is null || !_session.CanBack) return;
+        _session.Back();
+        _layout = MapStoryComposer.Compose(Story, _session.Current, _geography, _session.FocusId, _session.FocusName, Width, Height);
+    }
+
+    void Jump(int index)
+    {
+        if (Story is null) return;
+        _session.Jump(index);
+        _layout = MapStoryComposer.Compose(Story, _session.Current, _geography, _session.FocusId, _session.FocusName, Width, Height);
+    }
+}

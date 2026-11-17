@@ -1,0 +1,249 @@
+@namespace Fx.ControlKit.Charts
+@inherits Fx.ControlKit.FlexControlBase
+@using System.Globalization
+
+<div class="fx-pathflow @CssClass" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    @if (Nodes.Count == 0 || Links.Count == 0)
+    {
+        <div class="fx-pathflow-empty">@EmptyMessage</div>
+    }
+    else
+    {
+        var layout = ComputeLayout();
+        <svg class="fx-pathflow-svg"
+             viewBox="0 0 @F0(SvgWidth) @F0(SvgHeight)"
+             preserveAspectRatio="xMidYMid meet"
+             style="height:@Height; width:100%;"
+             xmlns="http://www.w3.org/2000/svg">
+
+            @foreach (var col in layout.StageHeaders)
+            {
+                <g class="fx-pathflow-stage-hdr">
+                    <text x="@F(col.CenterX)" y="16" text-anchor="middle" class="fx-pathflow-stage-lbl">@col.Title</text>
+                </g>
+            }
+
+            @foreach (var ribbon in layout.Ribbons)
+            {
+                var r = ribbon;
+                bool dimmed = _hoveredNodeId is not null
+                    && !string.Equals(_hoveredNodeId, r.Link.SourceId, StringComparison.Ordinal)
+                    && !string.Equals(_hoveredNodeId, r.Link.TargetId, StringComparison.Ordinal);
+                double opacity = dimmed ? 0.12 : (r.Link.IsLoop ? 0.58 : 0.42);
+
+                <path class="fx-pathflow-ribbon"
+                      d="@r.PathData"
+                      fill="@r.Color"
+                      fill-opacity="@F(opacity)"
+                      stroke="@r.Color"
+                      stroke-opacity="@F(Math.Min(0.85, opacity + 0.18))"
+                      stroke-width="@(r.Link.IsLoop ? "1.2" : "0.6")"
+                      stroke-dasharray="@(r.Link.IsLoop ? "4,2" : null)"
+                      @onclick="() => HandleLinkClickAsync(r.Link)">
+                    <title>@r.Tooltip</title>
+                </path>
+            }
+
+            @foreach (var n in layout.NodeBoxes)
+            {
+                var box = n;
+                string anchor = box.IsLastStage ? "end" : "start";
+                double textX = box.IsLastStage ? box.X - 7 : box.X + NodeWidth + 7;
+
+                <g class="fx-pathflow-node"
+                   @onmouseover="() => _hoveredNodeId = box.Node.Id"
+                   @onmouseout="() => _hoveredNodeId = null"
+                   @onclick="() => HandleNodeClickAsync(box.Node)">
+                    <rect x="@F(box.X)"
+                          y="@F(box.Y)"
+                          width="@F(NodeWidth)"
+                          height="@F(box.Height)"
+                          rx="2.5"
+                          fill="@box.Color"
+                          stroke="@(box.Node.IsDropOff ? "#dc2626" : "rgba(255,255,255,0.6)")"
+                          stroke-width="1"
+                          stroke-dasharray="@(box.Node.IsDropOff ? "3,2" : null)">
+                        <title>@box.Node.Label (@FormatCount(box.TotalValue))</title>
+                    </rect>
+                    <text x="@F(textX)"
+                          y="@F(box.Y + box.Height / 2 + 4)"
+                          text-anchor="@anchor"
+                          class="fx-pathflow-node-lbl @(box.Node.IsDropOff ? "fx-pathflow-dropoff-lbl" : "")">
+                        @Truncate(box.Node.Label, 22) (@FormatCount(box.TotalValue))
+                    </text>
+                </g>
+            }
+        </svg>
+    }
+</div>
+
+@code {
+    private const double SvgWidth = 860;
+    private const double SvgHeight = 340;
+    private const double PadLeft = 24;
+    private const double PadRight = 24;
+    private const double PadTop = 30;
+    private const double PadBottom = 18;
+    private const double NodeWidth = 15;
+    private const double NodeGap = 10;
+
+    private static readonly string[] DefaultPalette =
+    {
+        "#0a246a", "#2563eb", "#0284c7", "#0d9488", "#16a34a", "#7c3aed", "#d97706"
+    };
+
+    [Parameter] public IReadOnlyList<PathFlowNode> Nodes { get; set; } = Array.Empty<PathFlowNode>();
+    [Parameter] public IReadOnlyList<PathFlowLink> Links { get; set; } = Array.Empty<PathFlowLink>();
+    [Parameter] public IReadOnlyList<string>? StageTitles { get; set; }
+    [Parameter] public string Height { get; set; } = "340px";
+    [Parameter] public string EmptyMessage { get; set; } = "No multi-step user journeys recorded in the selected window.";
+    [Parameter] public string[]? Palette { get; set; }
+    [Parameter] public EventCallback<PathFlowNode> OnNodeSelected { get; set; }
+    [Parameter] public EventCallback<PathFlowLink> OnLinkSelected { get; set; }
+
+    private string? _hoveredNodeId;
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private sealed record StageHeader(double CenterX, string Title);
+    private sealed record NodeBox(PathFlowNode Node, double X, double Y, double Height, double TotalValue, string Color, bool IsLastStage);
+    private sealed record RibbonItem(PathFlowLink Link, string PathData, string Color, string Tooltip);
+    private sealed record FlowLayout(List<StageHeader> StageHeaders, List<NodeBox> NodeBoxes, List<RibbonItem> Ribbons);
+
+    private FlowLayout ComputeLayout()
+    {
+        var validLinks = Links.Where(l => l.Value > 0).ToList();
+        var stages = Nodes.Select(n => n.Stage).Distinct().OrderBy(s => s).ToList();
+        if (stages.Count == 0)
+            return new FlowLayout(new(), new(), new());
+
+        int stageCount = stages.Count;
+        double plotW = SvgWidth - PadLeft - PadRight - NodeWidth;
+        double plotH = SvgHeight - PadTop - PadBottom;
+        var palette = Palette is { Length: > 0 } ? Palette : DefaultPalette;
+
+        var incomingSum = validLinks
+            .GroupBy(l => l.TargetId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Value), StringComparer.Ordinal);
+        var outgoingSum = validLinks
+            .GroupBy(l => l.SourceId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Value), StringComparer.Ordinal);
+
+        double NodeWeight(PathFlowNode n)
+        {
+            double inV = incomingSum.GetValueOrDefault(n.Id);
+            double outV = outgoingSum.GetValueOrDefault(n.Id);
+            return Math.Max(n.Value, Math.Max(inV, outV));
+        }
+
+        double maxStageWeight = 1;
+        int maxNodesInStage = 1;
+        foreach (var st in stages)
+        {
+            var stNodes = Nodes.Where(n => n.Stage == st).ToList();
+            maxStageWeight = Math.Max(maxStageWeight, stNodes.Sum(NodeWeight));
+            maxNodesInStage = Math.Max(maxNodesInStage, stNodes.Count);
+        }
+
+        double availH = Math.Max(60, plotH - Math.Max(0, maxNodesInStage - 1) * NodeGap);
+        double scale = availH / maxStageWeight;
+
+        var headers = new List<StageHeader>(stageCount);
+        var boxes = new Dictionary<string, (NodeBox Box, double OutCursor, double InCursor)>(StringComparer.Ordinal);
+        var boxList = new List<NodeBox>(Nodes.Count);
+
+        for (int si = 0; si < stageCount; si++)
+        {
+            int st = stages[si];
+            double x = stageCount > 1
+                ? PadLeft + plotW * si / (stageCount - 1)
+                : PadLeft + plotW / 2;
+            string hdr = StageTitles is not null && si < StageTitles.Count
+                ? StageTitles[si]
+                : $"Step {si + 1}";
+            headers.Add(new StageHeader(x + NodeWidth / 2, hdr));
+
+            var colNodes = Nodes
+                .Where(n => n.Stage == st)
+                .OrderBy(n => n.IsDropOff ? 1 : 0)
+                .ThenByDescending(NodeWeight)
+                .ToList();
+
+            double curY = PadTop;
+            for (int ni = 0; ni < colNodes.Count; ni++)
+            {
+                var node = colNodes[ni];
+                double w = Math.Max(0.1, NodeWeight(node));
+                double h = Math.Max(8, w * scale);
+                string color = !string.IsNullOrWhiteSpace(node.Color)
+                    ? node.Color!
+                    : (node.IsDropOff ? "#94a3b8" : palette[(si + ni) % palette.Length]);
+
+                var nb = new NodeBox(node, x, curY, h, w, color, IsLastStage: si == stageCount - 1 && stageCount > 1);
+                boxes[node.Id] = (nb, curY, curY);
+                boxList.Add(nb);
+                curY += h + NodeGap;
+            }
+        }
+
+        var ribbons = new List<RibbonItem>(validLinks.Count);
+        foreach (var link in validLinks)
+        {
+            if (!boxes.TryGetValue(link.SourceId, out var srcEntry) || !boxes.TryGetValue(link.TargetId, out var tgtEntry))
+                continue;
+
+            double rh = Math.Max(2.5, link.Value * scale);
+            rh = Math.Min(rh, Math.Min(srcEntry.Box.Height, tgtEntry.Box.Height));
+
+            double x1 = srcEntry.Box.X + NodeWidth;
+            double x2 = tgtEntry.Box.X;
+            if (x2 <= x1)
+            {
+                x1 = srcEntry.Box.X;
+                x2 = tgtEntry.Box.X + NodeWidth;
+            }
+
+            double y1 = Math.Min(srcEntry.OutCursor, srcEntry.Box.Y + srcEntry.Box.Height - rh);
+            double y2 = Math.Min(tgtEntry.InCursor, tgtEntry.Box.Y + tgtEntry.Box.Height - rh);
+
+            boxes[link.SourceId] = (srcEntry.Box, srcEntry.OutCursor + rh, srcEntry.InCursor);
+            boxes[link.TargetId] = (tgtEntry.Box, tgtEntry.OutCursor, tgtEntry.InCursor + rh);
+
+            double cp1X = x1 + (x2 - x1) * 0.48;
+            double cp2X = x2 - (x2 - x1) * 0.48;
+            string d = $"M {F(x1)} {F(y1)} C {F(cp1X)} {F(y1)}, {F(cp2X)} {F(y2)}, {F(x2)} {F(y2)} " +
+                       $"L {F(x2)} {F(y2 + rh)} C {F(cp2X)} {F(y2 + rh)}, {F(cp1X)} {F(y1 + rh)}, {F(x1)} {F(y1 + rh)} Z";
+
+            string color = !string.IsNullOrWhiteSpace(link.Color)
+                ? link.Color!
+                : (tgtEntry.Box.Node.IsDropOff ? "#94a3b8" : (link.IsLoop ? "#f59e0b" : srcEntry.Box.Color));
+
+            string tip = $"{srcEntry.Box.Node.Label} → {tgtEntry.Box.Node.Label}: {FormatCount(link.Value)}";
+            ribbons.Add(new RibbonItem(link, d, color, tip));
+        }
+
+        return new FlowLayout(headers, boxList, ribbons);
+    }
+
+    private async Task HandleNodeClickAsync(PathFlowNode node)
+    {
+        RecordControlAction("NodeSelected", node.Label, $"stage={node.Stage}");
+        if (OnNodeSelected.HasDelegate)
+            await OnNodeSelected.InvokeAsync(node);
+    }
+
+    private async Task HandleLinkClickAsync(PathFlowLink link)
+    {
+        RecordControlAction("FlowSelected", $"{link.SourceId}->{link.TargetId}", FormatCount(link.Value));
+        if (OnLinkSelected.HasDelegate)
+            await OnLinkSelected.InvokeAsync(link);
+    }
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string F0(double v) => v.ToString("0", CultureInfo.InvariantCulture);
+    private static string FormatCount(double v) => v.ToString("N0", CultureInfo.InvariantCulture);
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+}

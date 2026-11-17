@@ -59,9 +59,11 @@
             await ValueChanged.InvokeAsync(_code);
         }
 
-        if (_code.Length == Length && !_code.Contains(' ') && OnComplete.HasDelegate)
+        if (_code.Length == Length && !_code.Contains(' '))
         {
-            await OnComplete.InvokeAsync(_code);
+            RecordControlAction("CodeCompleted", "[REDACTED]");
+            if (OnComplete.HasDelegate)
+                await OnComplete.InvokeAsync(_code);
         }
     }
 

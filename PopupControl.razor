@@ -9,7 +9,7 @@
         @if (IsOpen && Enabled)
         {
             <div data-fx-popup id="@_panelId" class="fx-popup-panel" role="@Role" aria-label="@AriaLabel" tabindex="-1"
-                 style="width:@Width;max-height:@MaxHeight;z-index:@ZIndex" @onkeydown="KeyDown">
+                 style="width:@Width;max-height:@MaxHeight;z-index:@ZIndex" @onkeydown="@PanelKeyDown">
                 @ChildContent
             </div>
         }
@@ -40,16 +40,41 @@
     public async Task CloseAsync() { IsOpen = false; await IsOpenChanged.InvokeAsync(false); await InvokeAsync(StateHasChanged); }
     public Task ToggleAsync() => IsOpen ? CloseAsync() : OpenAsync();
     private Task KeyDown(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+    // Escape is the browser's: the popup script (browser-capabilities.js) closes the popup on it. The Blazor
+    // handler is only the fallback for a popup the script could not attach to; bound for good, it was a server
+    // round trip for every key typed in the popup.
+    private bool _escapeFallback;
+    private EventCallback<KeyboardEventArgs> PanelKeyDown =>
+        _escapeFallback ? EventCallback.Factory.Create<KeyboardEventArgs>(this, KeyDown) : default;
+    private string? _boundHost;   // the host element the popup script is bound to
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Hidden and shown again within one round trip while open, the host is a new element: bind it anew.
+        if (_attached && IsOpen && Enabled && Visible && _boundHost != _host.Id) _attached = false;
         if (_attached == (IsOpen && Enabled && Visible)) return;
         _browser ??= new(JS); _self ??= DotNetObjectReference.Create(this);
         try
         {
-            if (IsOpen && Enabled && Visible) _attached = await _browser.InvokeAsync<bool>("popup", _host, new { anchorId=AnchorId, placement=Placement.ToString(), offset=Offset, dismiss=DismissOnOutsideClick, focus=FocusOnOpen }, _self);
-            else { await _browser.InvokeAsync<object?>("dispose", _host); _attached=false; }
+            if (IsOpen && Enabled && Visible)
+            {
+                var host = _host;
+                _attached = await _browser.InvokeAsync<bool>("popup", host, new { anchorId=AnchorId, placement=Placement.ToString(), offset=Offset, dismiss=DismissOnOutsideClick, focus=FocusOnOpen }, _self);
+                _boundHost = _attached ? host.Id : null;
+                UseEscapeFallback(!_attached);
+            }
+            else
+            {
+                await _browser.InvokeAsync<object?>("dispose", _host); _attached=false;
+                if (IsOpen && Enabled && Visible) StateHasChanged();   // reopened meanwhile: attach again
+            }
         }
-        catch (JSException) { /* CSS anchor placement and Escape remain available without DOM measurement. */ }
+        catch (JSException) { UseEscapeFallback(true); /* CSS anchor placement remains available without DOM measurement. */ }
+    }
+    private void UseEscapeFallback(bool on)
+    {
+        if (_escapeFallback == on) return;
+        _escapeFallback = on;
+        StateHasChanged();
     }
     public async ValueTask DisposeAsync()
     {

@@ -24,14 +24,18 @@ else
             }
         </div>
         <div class="fx-pager-nav">
-            <button type="button" class="fx-pager-btn"
+            <button type="button" class="fx-pager-btn fx-pager-nav-btn"
                     aria-label="First page"
                     disabled="@(Context.CurrentPage <= 1)"
-                    @onclick="() => Context.GoToPageAsync(1)">⟨⟨</button>
-            <button type="button" class="fx-pager-btn"
+                    @onclick="() => Context.GoToPageAsync(1)">
+                <SvgIconControl Name="chevrons-left" Size="12px" StrokeWidth="2.2" />
+            </button>
+            <button type="button" class="fx-pager-btn fx-pager-nav-btn"
                     aria-label="Previous page"
                     disabled="@(Context.CurrentPage <= 1)"
-                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage - 1)">⟨</button>
+                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage - 1)">
+                <SvgIconControl Name="chevron-left" Size="12px" StrokeWidth="2.2" />
+            </button>
 
             @foreach (var page in Context.PageNumbers)
             {
@@ -44,14 +48,18 @@ else
                         @onclick="() => Context.GoToPageAsync(capturedPage)">@capturedPage</button>
             }
 
-            <button type="button" class="fx-pager-btn"
+            <button type="button" class="fx-pager-btn fx-pager-nav-btn"
                     aria-label="Next page"
                     disabled="@(Context.CurrentPage >= Context.TotalPages)"
-                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage + 1)">⟩</button>
-            <button type="button" class="fx-pager-btn"
+                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage + 1)">
+                <SvgIconControl Name="chevron-right" Size="12px" StrokeWidth="2.2" />
+            </button>
+            <button type="button" class="fx-pager-btn fx-pager-nav-btn"
                     aria-label="Last page"
                     disabled="@(Context.CurrentPage >= Context.TotalPages)"
-                    @onclick="() => Context.GoToPageAsync(Context.TotalPages)">⟩⟩</button>
+                    @onclick="() => Context.GoToPageAsync(Context.TotalPages)">
+                <SvgIconControl Name="chevrons-right" Size="12px" StrokeWidth="2.2" />
+            </button>
         </div>
         <div class="fx-pager-size">
             <DropDownListControl TValue="int" TItem="GridPageSizeOption"

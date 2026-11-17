@@ -23,7 +23,7 @@ public static class ReportDesignerFileStore
         {
             destination = System.IO.Path.GetFullPath(destination);
             if (!destination.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Report designs must be saved as XML.");
+                throw new InvalidDataException("Report designs must be saved as RDL (.xml).");
             var design = ReportDesignerXmlSerializer.FromXml(request.Xml, request.SourceName, request.SourcePath);
             var savedXml = request.Xml;
             if (design.Elements.Any(element => element.Kind == "Subreport"))
@@ -111,7 +111,8 @@ public sealed class ReportDesignerPreview : IDisposable
         for (var suffix = 1; copied.Values.Contains(output, StringComparer.OrdinalIgnoreCase); suffix++)
             output = System.IO.Path.Combine(_directory, $"{suffix}-{fileName}");
         copied[sourcePath] = output;
-        var root = XDocument.Parse(xml);
+        // Whitespace-only rich-text runs are authored content (spaces and line breaks).
+        var root = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         foreach (var obj in root.Descendants("SubreportObject"))
         {
             var name = (string?)obj.Attribute("SubreportName") ?? "";
@@ -124,7 +125,7 @@ public sealed class ReportDesignerPreview : IDisposable
             {
                 // An inserted placeholder (no inline definition, no file hint) stays a placeholder.
                 if (string.IsNullOrWhiteSpace(hint)) continue;
-                throw new InvalidDataException($"External subreport '{name}' needs a file-backed report package. Uploaded XML must include its subreports inline.");
+                throw new InvalidDataException($"External subreport '{name}' needs a file-backed report package. Uploaded RDL must include its subreports inline.");
             }
             var folder = System.IO.Path.GetDirectoryName(sourcePath) ?? ".";
             var candidates = new[]
@@ -166,7 +167,7 @@ public sealed class ReportDesignerPreview : IDisposable
         {
             if (!ancestors.Add(path))
                 throw new InvalidDataException("A cyclic external subreport cannot be saved as a self-contained report.");
-            var xml = XDocument.Load(path);
+            var xml = XDocument.Load(path, LoadOptions.PreserveWhitespace);
             foreach (var obj in xml.Descendants("SubreportObject").ToList())
             {
                 var name = (string?)obj.Attribute("SubreportName") ?? "";

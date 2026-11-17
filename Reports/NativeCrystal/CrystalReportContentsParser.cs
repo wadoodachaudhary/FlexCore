@@ -33,12 +33,20 @@ internal static partial class CrystalReportContentsParser
         core.VersionMajor = reader.LoadUInt16();
         core.VersionMinor = reader.LoadUInt16();
         core.VersionPatch = reader.LoadUInt8();
+        reader.LegacyCellHeights = core.VersionMajor is > 0 and < 8;
         _ = reader.LoadBoolean();
         core.ReportName = reader.LoadString() ?? "";
         _ = reader.LoadEnum();
-        _ = reader.LoadInt32();
-        _ = reader.LoadInt32();
-        _ = reader.LoadBoolean();
+        var printDate = reader.LoadInt32();
+        _ = reader.LoadInt32(); // Saved time does not pin the run's time of day.
+        if (reader.LoadBoolean())
+        {
+            var date = CrystalReportParametersParser.CrystalDate(printDate);
+            if (!DateTime.TryParseExact(date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var fixedDate))
+                throw new InvalidDataException("The report enables a fixed print date but has no valid date.");
+            core.FixedPrintDate = fixedDate;
+        }
         var saveFlags = reader.LoadInt16();
         core.HasSavedData = reader.LoadBoolean();
         core.EnableSaveDataWithReport = (saveFlags & 2) != 0;
@@ -66,6 +74,11 @@ internal static partial class CrystalReportContentsParser
         var recordSortCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
         var groupSortCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
         var areaPairCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
+        // Legacy header102: an additional count and legacy option precede this flag.
+        // The native model defaults ShowAllHeadersOnDrillDown to false when absent.
+        if (reader.BytesLeftInRecord >= 2) _ = reader.LoadUInt16();
+        if (reader.BytesLeftInRecord > 0) _ = reader.LoadBoolean();
+        if (reader.BytesLeftInRecord > 0) core.ShowAllHeadersOnDrillDown = reader.LoadBoolean();
         reader.SkipRestOfRecord();
 
         if (reader.Fork().LoadAnyRecord().Type == 351)
@@ -84,6 +97,8 @@ internal static partial class CrystalReportContentsParser
             ApplyPageContentSize(core, 12240, 15840);
         }
 
+        ReadDatabaseOptions(reader.Fork(), core, dataDefinition);
+
         if (database is not null)
         {
             TryParseDataDefinition(
@@ -100,6 +115,33 @@ internal static partial class CrystalReportContentsParser
         }
 
         return new CrystalReportContents(core, dataDefinition);
+    }
+
+    private static void ReadDatabaseOptions(TslvArchiveReader reader, CrystalReportCore core, CrystalDataDefinitionModel definition)
+    {
+        // Legacy ReportOptions (352) follows the report areas, before end-of-definition (103).
+        while (reader.BytesLeftInRecord > 0)
+        {
+            var record = reader.LoadAnyRecord();
+            if (record.Type is 103 or 101) return;
+            if (record.Type == 352)
+            {
+                if (record.Schema > 1792)
+                    throw new InvalidDataException($"Report options use unsupported TSLV schema {record.Schema}.");
+                _ = reader.LoadBoolean();
+                definition.ConvertDatabaseDateTimeToDate = reader.LoadEnum() == 1; // ToDate; the setting belongs to this Contents stream.
+                core.ConvertDatabaseNullToDefault = reader.LoadBoolean();
+                if (reader.BytesLeftInRecord == 0) return;
+                _ = reader.LoadBoolean();
+                _ = reader.LoadBoolean();
+                _ = reader.LoadUInt16(); // Legacy zoom mode is a 16-bit value.
+                // Case-sensitive, debug, group tree, Cartesian joins and async query precede distinct.
+                for (var index = 0; index < 5; index++) _ = reader.LoadBoolean();
+                core.EnableSelectDistinctRecords = reader.LoadBoolean();
+                return;
+            }
+            reader.SkipRestOfRecord();
+        }
     }
 
     private static void TryParseDataDefinition(
@@ -160,12 +202,23 @@ internal static partial class CrystalReportContentsParser
                 ReadAreaPair(reader, dataDefinition, fieldReferences, i + 1);
         }
 
+            ReadSavedDataSelection(reader.Fork(), dataDefinition);
             NormalizeGroupConditions(database, dataDefinition);
             ResolveDeferredGroupNameReferences(dataDefinition);
             ResolveDeferredSummaryReferences(dataDefinition);
-            foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects)
+            ResolveNativeFieldFormats(database, dataDefinition);
+            ResolveNumericFormats(database, dataDefinition);
+            // A chart can precede the cross-tab it references in drawing order.
+            foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects.OrderBy(item => item.Item1.Kind == "Chart"))
             {
-                try { reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition); }
+                try
+                {
+                    reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition, reportObject);
+                    var area = dataDefinition.ReportDefinition.Areas.FirstOrDefault(area => area.Sections.Any(section => section.ReportObjects.Contains(reportObject)));
+                    if (reportObject.Kind == "CrossTab" && area is { Kind: "GroupHeader" or "GroupFooter", GroupIndex: > 0 }
+                        && area.GroupIndex <= dataDefinition.Groups.Count)
+                        reportObject.Analysis.GroupScope = dataDefinition.Groups[area.GroupIndex - 1].ConditionField;
+                }
                 catch (Exception error) when (error is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException or NotSupportedException)
                 { reportObject.AnalysisDiagnostic = error.Message; }
             }
@@ -175,6 +228,8 @@ internal static partial class CrystalReportContentsParser
                 ResolveConditions(obj.Format.ConditionReferences, obj.Format.ConditionFormulas);
                 ResolveConditions(obj.FontConditionReferences, obj.FontConditionFormulas);
                 ResolveConditions(obj.Border.ConditionReferences, obj.Border.ConditionFormulas);
+                foreach (var run in obj.TextRuns)
+                    ResolveConditions(run.FontConditionReferences, run.FontConditionFormulas);
             }
             void ResolveConditions(List<(string Property, string Name, int Type, int Index)> references, Dictionary<string, string> formulas)
             {
@@ -201,6 +256,39 @@ internal static partial class CrystalReportContentsParser
             }
 
             dataDefinition.ParseWarnings.Add($"Report definition extraction stopped at TSLV record {reader.CurrentRecord?.Type}: {error.Message}");
+        }
+    }
+
+    // Later archives store the saved-data selection after the area pairs and report options.
+    // A selection that cannot be read is left out; the rest of the report definition is still read.
+    private static void ReadSavedDataSelection(TslvArchiveReader selection, CrystalDataDefinitionModel dataDefinition)
+    {
+        try
+        {
+            if (selection.BytesLeftInRecord > 0 && selection.LoadAnyRecord().Type == 352)
+            {
+                selection.SkipRestOfRecord();
+                if (selection.BytesLeftInRecord > 0 && selection.Fork().LoadAnyRecord().Type == 119)
+                {
+                    var saved = ReadFormulaField(selection);
+                    var expression = NormalizeSelectionFormula(saved.FormulaText);
+                    if (expression.Length > 0 && saved.Name.Equals("Saved Data Selection", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (string.IsNullOrWhiteSpace(dataDefinition.RecordSelectionFormula))
+                        {
+                            dataDefinition.RecordSelectionFormula = expression;
+                            dataDefinition.RecordSelectionFormulaSyntax = saved.Syntax;
+                        }
+                        // Each formula ends its own line, so a trailing // comment in either one stops there.
+                        else if (saved.Syntax == dataDefinition.RecordSelectionFormulaSyntax && saved.Syntax == 0)
+                            dataDefinition.RecordSelectionFormula = $"({dataDefinition.RecordSelectionFormula}\n) and ({expression}\n)";
+                    }
+                }
+            }
+        }
+        catch (Exception error) when (error is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException or NotSupportedException)
+        {
+            dataDefinition.ParseWarnings.Add($"The saved data selection could not be read and is not applied: {error.Message}");
         }
     }
 
@@ -711,20 +799,22 @@ internal static partial class CrystalReportContentsParser
             }
         }
 
-        if (reader.BytesLeftInRecord >= 2)
-        {
-            _ = reader.LoadBoolean();
-        }
-
+        var hasValueLimits = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
         if (reader.BytesLeftInRecord >= 16)
         {
-            _ = reader.LoadDouble();
-            _ = reader.LoadDouble();
+            // The archive stores maximum before minimum, including string-length limits.
+            var maximum = reader.LoadDouble();
+            var minimum = reader.LoadDouble();
+            if (hasValueLimits)
+            {
+                parameter.MaximumValue = maximum;
+                parameter.MinimumValue = minimum;
+            }
         }
 
         if (reader.BytesLeftInRecord > 0)
         {
-            _ = reader.LoadString();
+            parameter.EditMask = reader.LoadString() ?? "";
         }
 
         if (reader.BytesLeftInRecord >= 32)
@@ -900,7 +990,7 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.BytesLeftInRecord > 0)
         {
-            _ = ReadFieldReference(reader, fieldReferences);
+            summary.WeightField = ReadFieldReference(reader, fieldReferences);
         }
 
         if (reader.BytesLeftInRecord > 0)
@@ -908,7 +998,7 @@ internal static partial class CrystalReportContentsParser
             var hasPercentSummary = reader.LoadBoolean();
             if (hasPercentSummary && reader.BytesLeftInRecord >= 2)
             {
-                _ = reader.LoadInt16();
+                summary.PercentSummaryIndex = reader.LoadInt16();
             }
         }
 
@@ -920,10 +1010,10 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.BytesLeftInRecord > 0)
         {
-            var summaryType = reader.LoadEnum();
-            if (summaryType != 0 && reader.BytesLeftInRecord >= 2)
+            summary.SummaryType = reader.LoadEnum();
+            if (summary.SummaryType != 0 && reader.BytesLeftInRecord >= 2)
             {
-                _ = reader.LoadInt16();
+                summary.SummaryTypeIndex = reader.LoadInt16();
             }
         }
 
@@ -1189,13 +1279,8 @@ internal static partial class CrystalReportContentsParser
 
     private static string SummaryFormulaName(
         CrystalSummaryFieldModel summary,
-        CrystalDataDefinitionModel dataDefinition)
-    {
-        var groupField = SummaryGroupField(summary, dataDefinition);
-        return string.IsNullOrWhiteSpace(groupField)
-            ? $"{SummaryOperationName(summary.Operation)} ({summary.SummarizedField})"
-            : $"{SummaryOperationName(summary.Operation)} ({summary.SummarizedField}, {groupField})";
-    }
+        CrystalDataDefinitionModel dataDefinition) =>
+        CrystalReportXmlWriter.SummaryFormulaName(summary, dataDefinition);
 
     private static string SummaryGroupField(
         CrystalSummaryFieldModel summary,
@@ -1347,6 +1432,7 @@ internal static partial class CrystalReportContentsParser
         var enableRepeatGroupHeader = false;
         var keepGroupTogether = false;
         var groupIndent = 0;
+        var groupsPerPage = 0;
         if (record.Type == 136)
         {
             // GroupAreaPair: repeat group header, then keep group together.
@@ -1357,6 +1443,11 @@ internal static partial class CrystalReportContentsParser
             if (reader.BytesLeftInRecord >= 4)
             {
                 groupIndent = Math.Max(0, reader.LoadInt32());
+            }
+            if (reader.BytesLeftInRecord >= 8)
+            {
+                _ = reader.LoadInt32(); // hierarchical connector colour
+                groupsPerPage = Math.Max(0, reader.LoadInt32());
             }
         }
 
@@ -1382,7 +1473,7 @@ internal static partial class CrystalReportContentsParser
                     fieldReferences,
                     layoutOrdinal,
                     enableRepeatGroupHeader,
-                    keepGroupTogether);
+                    keepGroupTogether, groupsPerPage);
                 continue;
             }
 
@@ -1458,9 +1549,9 @@ internal static partial class CrystalReportContentsParser
         SkipFieldReference(reader);
         _ = reader.LoadInt16();
         group.ShowLastDateInPeriod = reader.LoadBoolean();
-        _ = reader.LoadBoolean();
+        group.SuppressSubtotal = reader.LoadBoolean();
         var hasRanges = reader.LoadBoolean();
-        if (More()) _ = reader.LoadBoolean();
+        if (More()) group.SuppressLabel = reader.LoadBoolean();
         if (More()) _ = reader.LoadBoolean();
         CrystalFormulaFieldModel? nameFormula = null;
         if (More())
@@ -1531,7 +1622,7 @@ internal static partial class CrystalReportContentsParser
         FieldReferenceTable fieldReferences,
         int areaPairOrdinal,
         bool enableRepeatGroupHeader,
-        bool keepGroupTogether)
+        bool keepGroupTogether, int groupsPerPage)
     {
         var areaHeader = ReadAreaHeader(reader);
         var areaFormat = new CrystalSectionFormatModel { EnableKeepTogether = false };
@@ -1558,6 +1649,7 @@ internal static partial class CrystalReportContentsParser
                     GroupPairOrder = sectionKind is "GroupHeader" or "GroupFooter" ? areaPairOrdinal : 0,
                     EnableRepeatGroupHeader = enableRepeatGroupHeader,
                     EnableKeepGroupTogether = keepGroupTogether,
+                    GroupsPerPage = groupsPerPage,
                     Format = areaFormat
                 };
 
@@ -1653,7 +1745,7 @@ internal static partial class CrystalReportContentsParser
                 continue;
             }
 
-            if (next.Type is 180 or 185)
+            if (next.Type is 180 or 182 or 185)
             {
                 reportObjects.Add(ReadUnsupportedObject(reader, endType, fieldReferences, dataDefinition));
                 continue;
@@ -1720,7 +1812,7 @@ internal static partial class CrystalReportContentsParser
     {
         var bindingReader = reader.Fork();
         var start = reader.CurrentRecord!;
-        var kind = start.Type == 180 ? "Chart" : "CrossTab";
+        var kind = start.Type switch { 180 => "Chart", 182 => "Map", 185 => "CrossTab", _ => throw new InvalidDataException("Unexpected analytical object record.") };
         var source = new CrystalUnsupportedObjectSource
         {
             Offset = start.Offset, RecordType = start.Type, Schema = start.Schema
@@ -1731,14 +1823,14 @@ internal static partial class CrystalReportContentsParser
             UnsupportedSource = source
         };
 
-        // Legacy ChartObject -> AnalysisObject (179) -> OleObject (174) -> base (158).
+        // Charts and geographic maps both inherit AnalysisObject (179) and OleObject (174).
         // Legacy CrossTabObject -> GridObject (184) -> base (158).
         ReadMetadata("identity/size", reader.Fork(), probe =>
         {
-            if (kind == "Chart")
+            if (kind is "Chart" or "Map")
             {
-                probe.LoadNextRecord(179, 1792, 181);
-                probe.LoadNextRecord(174, 1792, 181);
+                probe.LoadNextRecord(179, 1792, start.Type + 1);
+                probe.LoadNextRecord(174, 1792, start.Type + 1);
             }
             else probe.LoadNextRecord(184, 1792, 186);
             probe.LoadNextRecord(158, 1792, start.Type + 1);
@@ -1778,7 +1870,7 @@ internal static partial class CrystalReportContentsParser
         }
         source.ArchiveBytes = reader.CopyRange(start.Offset, reader.Position - start.Offset);
         if (!source.Complete) source.MetadataDiagnostics.Add("Object end record is missing; retained bytes stop before the next object/section.");
-        if (source.Complete) fieldReferences.AnalyticalObjects.Add((reportObject, bindingReader));
+        if (source.Complete && kind != "Map") fieldReferences.AnalyticalObjects.Add((reportObject, bindingReader));
         return reportObject;
 
         void ReadMetadata(string label, TslvArchiveReader probe, Action<TslvArchiveReader> read)
@@ -1791,7 +1883,7 @@ internal static partial class CrystalReportContentsParser
 
     private static bool IsReportObjectStart(int recordType)
     {
-        return recordType is 159 or 165 or 170 or 175;
+        return recordType is 159 or 165 or 170 or 172 or 175;
     }
 
     private static CrystalReportObjectModel? ReadReportObject(
@@ -1807,6 +1899,7 @@ internal static partial class CrystalReportContentsParser
                 159 => ReadFieldObject(reader, fieldReferences, dataDefinition),
                 165 => ReadTextObject(reader, fieldReferences, dataDefinition),
                 170 => ReadLineObject(reader),
+                172 => ReadBoxObject(reader),
                 175 => ReadPictureObject(reader),
                 _ => null
             };
@@ -1839,7 +1932,7 @@ internal static partial class CrystalReportContentsParser
         reader.SkipRestOfRecord();
         ReadCommonReportObjectRecords(reader, reportObject);
         ReadFontColourProperties(reader, reportObject);
-        SkipUntilRecord(reader, 160);
+        ReadNativeFieldFormats(reader, reportObject);
         return reportObject;
     }
 
@@ -1865,10 +1958,15 @@ internal static partial class CrystalReportContentsParser
                 ? reader.LoadBoolean()
                 : firstFlag;
         }
+        // The Format Editor's two subreport formulas follow the flags: the on-demand caption and the preview tab text.
+        var captionReferences = new List<(string Property, string Name, int Type, int Index)>();
+        ReadConditionReferences(reader, captionReferences, ["OnDemandCaption", "SubreportPreviewTabText"]);
 
         reader.SkipRestOfRecord();
         ReadCommonReportObjectRecords(reader, reportObject);
-        reportObject.Format.EnableCanGrow = true;
+        if (reportObject.EnableOnDemand) reportObject.Format.ConditionReferences.AddRange(captionReferences);
+        // The object's colour and font (records 257, 8, 258) come before its parameter links (260); a caption prints in them.
+        ReadFontColourProperties(reader, reportObject);
         while (reader.BytesLeftInRecord > 0)
         {
             var next = reader.LoadAnyRecord();
@@ -1934,15 +2032,16 @@ internal static partial class CrystalReportContentsParser
     {
         var reportObject = ReadReportObjectBase(reader, "TextObject", "Text", 166);
 
-        if (reader.BytesLeftInRecord >= 16)
+        // Older text objects end after the paragraph count.
+        if (reader.BytesLeftInRecord >= 10)
         {
             _ = reader.LoadBoolean();
-            _ = reader.LoadBoolean();
-            _ = reader.LoadBoolean();
+            reportObject.SuppressIfDuplicate = reader.LoadBoolean();
+            reportObject.SuppressEmbeddedFieldBlankLines = reader.LoadBoolean();
             reportObject.MaxNumberOfLines = reader.LoadUInt16();
             var paragraphCount = reader.LoadUInt16();
-            _ = reader.LoadInt32();
-            var isHeading = reader.LoadBoolean();
+            if (reader.BytesLeftInRecord >= 4) _ = reader.LoadInt32();
+            var isHeading = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
             reader.SkipRestOfRecord();
 
             ReadCommonReportObjectRecords(reader, reportObject);
@@ -1983,9 +2082,10 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.BytesLeftInRecord >= 8)
         {
-            _ = reader.LoadInt16();
+            reportObject.LineEndSection = reader.LoadInt16();
             endLeft = reader.LoadInt32Compressed();
             endTop = reader.LoadInt32Compressed();
+            reportObject.LineEndTop = endTop;
             _ = reader.LoadBoolean();
         }
 
@@ -2018,6 +2118,23 @@ internal static partial class CrystalReportContentsParser
         ReadCommonReportObjectRecords(reader, reportObject);
         SkipUntilRecord(reader, 171);
         return reportObject;
+    }
+
+    private static CrystalReportObjectModel ReadBoxObject(TslvArchiveReader reader)
+    {
+        _ = reader.LoadNextRecord(169, 1792, 173);
+        var box = ReadReportObjectBase(reader, "BoxObject", "Box", 173);
+        if (reader.BytesLeftInRecord >= 8)
+        {
+            box.LineEndSection = reader.LoadInt16();
+            _ = reader.LoadInt32Compressed();
+            box.LineEndTop = reader.LoadInt32Compressed();
+        }
+        reader.SkipRestOfRecord(); // End of the shared line/box geometry.
+        reader.SkipRestOfRecord(); // Position, format and border follow the box wrapper.
+        ReadCommonReportObjectRecords(reader, box);
+        SkipUntilRecord(reader, 173);
+        return box;
     }
 
     private static CrystalReportObjectModel ReadPictureObject(TslvArchiveReader reader)
@@ -2134,12 +2251,22 @@ internal static partial class CrystalReportContentsParser
             format.HorizontalAlignment = HorizontalAlignmentName(reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
             if (reader.BytesLeftInRecord > 0)
             {
-                reader.SkipBytes(1);
+                _ = reader.LoadEnum();
             }
 
             format.EnableKeepTogether = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
             format.EnableCloseAtPageBreak = !(reader.BytesLeftInRecord >= 2 && reader.LoadBoolean());
             format.EnableCanGrow = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
+            // The saved angle in degrees follows the legacy tooltip and hyperlink strings.
+            var tail = reader.Fork();
+            try
+            {
+                if (tail.BytesLeftInRecord > 0) _ = tail.LoadString();
+                if (tail.BytesLeftInRecord > 0) _ = tail.LoadString();
+                if (tail.BytesLeftInRecord >= 2) format.TextRotation = tail.LoadUInt16();
+            }
+            catch (Exception error) when (error is EndOfStreamException or InvalidDataException)
+            { /* Short legacy records retain their horizontal default. */ }
             reader.SkipRestOfRecord();
             // ReportObjectProperties.w: only the called formatting surface is migrated.
             ReadConditionReferences(reader, format.ConditionReferences, ["EnableSuppress", "HorizontalAlignment", "", "EnableKeepTogether", "EnableCloseAtPageBreak",
@@ -2171,10 +2298,7 @@ internal static partial class CrystalReportContentsParser
             border.RightLineStyle = LineStyleName(reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
             border.TopLineStyle = LineStyleName(reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
             border.BottomLineStyle = LineStyleName(reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
-            if (reader.BytesLeftInRecord >= 2)
-            {
-                _ = reader.LoadBoolean();
-            }
+            border.EnableTightHorizontal = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
 
             if (reader.BytesLeftInRecord >= 2)
             {
@@ -2191,6 +2315,7 @@ internal static partial class CrystalReportContentsParser
             {
                 border.BackgroundColor = ReadCrystalColor(reader, nullColor: CrystalColorModel.TransparentWhite());
             }
+            if (reader.BytesLeftInRecord >= 4) border.LineWidth = reader.LoadInt32();
             reader.SkipRestOfRecord();
             ReadConditionReferences(reader, border.ConditionReferences, ["LeftLineStyle", "RightLineStyle", "TopLineStyle", "BottomLineStyle",
                 "EnableTightHorizontal", "", "HasDropShadow", "BorderColor", "BackgroundColor", "LineWidth", "FillStyle"]);
@@ -2218,6 +2343,7 @@ internal static partial class CrystalReportContentsParser
         CrystalDataDefinitionModel dataDefinition,
         CrystalReportObjectModel reportObject)
     {
+        var firstRun = reportObject.TextRuns.Count;
         var text = new System.Text.StringBuilder();
         for (var i = 0; i < paragraphCount; i++)
         {
@@ -2230,7 +2356,30 @@ internal static partial class CrystalReportContentsParser
             text.Append(ReadTextParagraph(reader, fieldReferences, dataDefinition, reportObject));
         }
 
-        return text.ToString().Replace('\u00a0', ' ');
+        NormalizeTextRunLineEndings(reportObject.TextRuns, firstRun);
+        return text.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace('\u00a0', ' ');
+    }
+
+    private static void NormalizeTextRunLineEndings(List<CrystalTextRunModel> runs, int firstRun)
+    {
+        var afterCarriageReturn = false;
+        for (var index = firstRun; index < runs.Count; index++)
+        {
+            var run = runs[index];
+            // An unresolved embedded field separates its neighboring literal characters.
+            if (run.Binding.Length > 0) afterCarriageReturn = false;
+            var normalized = new System.Text.StringBuilder(run.Text.Length);
+            foreach (var character in run.Text)
+            {
+                // A CRLF can straddle styled runs or the native paragraph boundary.
+                if (character == '\n' && afterCarriageReturn) { afterCarriageReturn = false; continue; }
+                normalized.Append(character == '\r' ? '\n' : character);
+                afterCarriageReturn = character == '\r';
+            }
+            if (run.Binding.Length > 0) afterCarriageReturn = false;
+            var value = normalized.ToString();
+            if (value != run.Text) runs[index] = run with { Text = value };
+        }
     }
 
     private static string ReadTextParagraph(
@@ -2291,25 +2440,25 @@ internal static partial class CrystalReportContentsParser
         CrystalReportObjectModel reportObject)
     {
         var text = reader.LoadString() ?? "";
-        if (reader.BytesLeftInRecord >= 4)
-        {
-            _ = reader.LoadInt32();
-        }
+        var spacing = reader.BytesLeftInRecord >= 4 ? Math.Clamp(reader.LoadInt32(), 0, 10000) : 0;
 
         reader.SkipRestOfRecord();
-        var style = ReadFontColourProperties(reader, reportObject);
+        var references = new List<(string Property, string Name, int Type, int Index)>();
+        var style = ReadFontColourProperties(reader, reportObject, references);
         _ = reader.LoadNextRecord(195, 1792, 193);
         reader.SkipRestOfRecord();
-        CaptureTextRun(reportObject, text, "", style.Font, style.Color);
+        CaptureTextRun(reportObject, text, "", style.Font, style.Color, spacing).FontConditionReferences.AddRange(references);
         return text;
     }
 
-    private static void CaptureTextRun(CrystalReportObjectModel item, string text, string binding, CrystalFontModel? font = null, CrystalColorModel? color = null)
+    private static CrystalTextRunModel CaptureTextRun(CrystalReportObjectModel item, string text, string binding, CrystalFontModel? font = null, CrystalColorModel? color = null, int spacing = 0)
     {
         font ??= item.Font;
         color ??= item.Color;
-        item.TextRuns.Add(new(text.Replace('\u00a0', ' '), binding, font.FontFamily, font.Size,
-            font.Bold, font.Italic, font.Underline, $"#{color.R:x2}{color.G:x2}{color.B:x2}"));
+        var run = new CrystalTextRunModel(text.Replace('\u00a0', ' '), binding, font.FontFamily, font.Size,
+            font.Bold, font.Italic, font.Underline, $"#{color.R:x2}{color.G:x2}{color.B:x2}") { CharacterSpacingTwips = spacing };
+        item.TextRuns.Add(run);
+        return run;
     }
 
     private static string ReadFieldElement(
@@ -2324,23 +2473,28 @@ internal static partial class CrystalReportContentsParser
             _ = reader.LoadInt32();
         }
 
-        if (reader.BytesLeftInRecord >= 4)
-        {
-            _ = reader.LoadInt32();
-        }
+        var spacing = reader.BytesLeftInRecord >= 4 ? Math.Max(0, reader.LoadInt32()) : 0;
 
         text = ReadSpecialFieldIdentity(reader, fieldReferences) ?? text;
 
         reader.SkipRestOfRecord();
-        var style = ReadFontColourProperties(reader, reportObject);
-        SkipUntilRecord(reader, 197);
-        CaptureTextRun(reportObject, "", text, style.Font, style.Color);
+        var references = new List<(string Property, string Name, int Type, int Index)>();
+        var style = ReadFontColourProperties(reader, reportObject, references);
+        // The embedded field's own format properties follow its font, as they do for a field object:
+        // a date printed inside a text object keeps its authored format ("Printed November 03, 2026").
+        var properties = new CrystalReportObjectModel { Name = reportObject.Name };
+        ReadNativeFieldFormats(reader, properties, endType: 197);
+        var run = CaptureTextRun(reportObject, "", text, style.Font, style.Color, spacing);
+        run.FontConditionReferences.AddRange(references);
+        run.NativeDateTimeFormat = properties.NativeDateTimeFormat;
+        run.NativeNumericCandidates.AddRange(properties.NativeNumericCandidates);
         return text;
     }
 
     private static (CrystalFontModel Font, CrystalColorModel Color) ReadFontColourProperties(
         TslvArchiveReader reader,
-        CrystalReportObjectModel reportObject)
+        CrystalReportObjectModel reportObject,
+        List<(string Property, string Name, int Type, int Index)>? runReferences = null)
     {
         if (reader.BytesLeftInRecord <= 0)
         {
@@ -2358,7 +2512,8 @@ internal static partial class CrystalReportContentsParser
         var parsedColor = reportObject.Color;
         if (reader.BytesLeftInRecord >= 4)
         {
-            parsedColor = ReadCrystalColor(reader, nullColor: CrystalColorModel.Black());
+            // Opaque white is a valid font COLORREF (0xffffffff).
+            parsedColor = ReadCrystalColor(reader, nullColor: new CrystalColorModel { Name = "White", R = 255, G = 255, B = 255 });
         }
 
         while (reader.CurrentRecord is not null && reader.CurrentRecord.Type != 257)
@@ -2368,7 +2523,7 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.CurrentRecord?.Type == 257)
         {
-            var references = reportObject.HasFont ? [] : reportObject.FontConditionReferences;
+            var references = runReferences ?? reportObject.FontConditionReferences;
             ReadConditionReferences(reader, references, ["Color", "Size", "Strikeout", "Underline", "Style", "Name"]);
             reader.SkipRestOfRecord();
         }
@@ -2380,7 +2535,7 @@ internal static partial class CrystalReportContentsParser
             var parsedFont = reportObject.Font;
             if (font.Type == 8)
             {
-                parsedFont = ReadLogicalFont(reader);
+                parsedFont = ReadLogicalFont(reader, textRun: runReferences is not null);
             }
 
             reader.SkipRestOfRecord();
@@ -2402,7 +2557,7 @@ internal static partial class CrystalReportContentsParser
         return runStyle;
     }
 
-    private static CrystalFontModel ReadLogicalFont(TslvArchiveReader reader)
+    private static CrystalFontModel ReadLogicalFont(TslvArchiveReader reader, bool textRun = false)
     {
         var font = new CrystalFontModel();
         var name = reader.LoadString() ?? "Arial";
@@ -2417,9 +2572,19 @@ internal static partial class CrystalReportContentsParser
         font.Underline = reader.BytesLeftInRecord >= 2 && reader.LoadUInt16() != 0;
         font.Strikeout = reader.BytesLeftInRecord >= 2 && reader.LoadUInt16() != 0;
         font.Weight = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 400;
-        if (reader.BytesLeftInRecord >= 4)
+        var hasTwipsSize = reader.BytesLeftInRecord >= 4;
+        if (hasTwipsSize)
         {
             sizeInPoints = reader.LoadInt32() / 20.0;
+        }
+
+        if (textRun && (!hasTwipsSize || reader.LegacyCellHeights)
+            && CrystalDeviceFont.EmFromCellHeight(name, font.Weight > 400, font.Italic, sizeInPoints) is { } em)
+        {
+            // Crystal 7 archives store a text run's size as the GDI cell height, with or without the twips field; Crystal 8
+            // and later store the em, and a run without the twips field holds the cell height in any version. A "10pt"
+            // Crystal 7 paragraph lays out at about a 9pt em. Field fonts keep their own size.
+            sizeInPoints = Math.Round(em, 2);
         }
 
         font.Size = sizeInPoints;
@@ -2514,6 +2679,15 @@ internal static partial class CrystalReportContentsParser
                 states.Add(ReadFormatState(reader));
             }
 
+            // SectionProperties stores its static fill as three BGR bytes after the flags.
+            if (reader.BytesLeftInRecord >= 3)
+            {
+                var blue = reader.LoadUInt8();
+                var green = reader.LoadUInt8();
+                var red = reader.LoadUInt8();
+                if (red != 255 || green != 255 || blue != 255)
+                    format.BackgroundColor = new() { A = 255, R = red, G = green, B = blue, Name = $"ff{red:x2}{green:x2}{blue:x2}" };
+            }
             // After the area code (kind, header/footer, section flag) come SectionProperties' flags in their saved order: visible, not hidden,
             // new page before, new page after, keep together, suppress blank section, reset page number after, print at bottom of page, underlay.
             // An area keeps its own keep-together and print-at-bottom (FormattedArea); hiding and suppress-if-blank apply to sections only.
@@ -2527,6 +2701,28 @@ internal static partial class CrystalReportContentsParser
             format.EnableResetPageNumberAfter = State(9) == 1;
             format.EnablePrintAtBottomOfPage = State(10) == 1;
             format.EnableUnderlaySection = !area && State(11) == 1;
+            // TSLV 254 has both free-form placement and in-read-only-area flags.
+            // Older revisions end before the optional page orientation and record limit.
+            if (reader.BytesLeftInRecord >= 20)
+            {
+                var options = reader.Fork();
+                try
+                {
+                    _ = options.LoadBoolean(); // free-form placement
+                    _ = options.LoadBoolean(); // reserve minimum footer
+                    _ = options.LoadInt32(); // indentation
+                    options.SkipString(); // CSS class
+                    if (options.BytesLeftInRecord >= 11)
+                    {
+                        _ = options.LoadBoolean(); // read only
+                        _ = options.LoadBoolean(); // in read-only area
+                        _ = options.LoadBoolean(); // relative positions
+                        _ = options.LoadUInt8(); // orientation
+                        format.RecordsPerPage = Math.Max(0, options.LoadInt32());
+                    }
+                }
+                catch (Exception optionsError) when (optionsError is InvalidDataException or EndOfStreamException) { /* An unknown options tail keeps no records-per-page limit; the section's conditions still follow. */ }
+            }
 
             reader.SkipRestOfRecord();
             if (fieldReferences is not null &&
@@ -2746,7 +2942,9 @@ internal static partial class CrystalReportContentsParser
         {
             case 1:
             {
-                NormalizeMargins(core, 245);
+                // Unspecified margins use Crystal's quarter-inch page default,
+                // not the Java runtime's printer-dependent 245-twip fallback.
+                NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 reader.SkipRestOfRecord();
                 if (hasSettings)
@@ -2760,7 +2958,7 @@ internal static partial class CrystalReportContentsParser
             }
             case 3:
             {
-                NormalizeMargins(core, 245);
+                NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 _ = reader.LoadString();
                 core.PrinterName = reader.LoadString() ?? "";
@@ -2777,6 +2975,8 @@ internal static partial class CrystalReportContentsParser
             }
             case 5:
             {
+                // "No Printer": the designer laid the report out on the screen device.
+                core.NoPrinter = true;
                 NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 reader.SkipRestOfRecord();

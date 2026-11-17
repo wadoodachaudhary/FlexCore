@@ -7,7 +7,12 @@ public sealed partial class ReportLayoutSession
 
     private object? RunningTotal(string name, ReportLayoutSummary total, int row)
     {
-        if (row < 0 || _rows.Length == 0) return total.Operation is "Sum" or "Count" or "DistinctCount" ? 0m : null;
+        if (row < 0 || _rows.Length == 0)
+        {
+            // No group instance exists in an empty template. Keep report-wide empty totals unchanged.
+            if (total.Reset.Type.Equals("OnChangeOfGroup", StringComparison.OrdinalIgnoreCase)) return null;
+            return total.Operation is "Sum" or "Count" or "DistinctCount" ? 0m : null;
+        }
         if (_runningValues.TryGetValue(name, out var cached)) return cached[Math.Min(row, cached.Length - 1)];
         if (!_runningEvaluation.Add(name)) throw new InvalidDataException($"Circular running total '{name}'.");
         try

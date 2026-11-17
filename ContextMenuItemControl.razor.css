@@ -32,13 +32,23 @@
 }
 
 .fx-context-menu-item-icon {
-    flex: 0 0 15px;
-    width: 15px;
+    flex: 0 0 16px;
+    width: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
 }
 
 .fx-context-menu-item-text {
     flex: 1 1 auto;
+}
+
+.fx-context-menu-item-shortcut {
+    flex: 0 0 auto;
+    margin-left: 24px;
+    opacity: 0.8;
+    font-size: 0.95em;
 }
 
 .fx-context-menu-item-arrow {

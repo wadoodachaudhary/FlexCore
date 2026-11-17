@@ -19,8 +19,13 @@ internal static class ColumnAutoFit
     public const int DefaultSampleSize = 50;
     /// <summary>Two grip mousedowns on the same column within this window are a double-click.</summary>
     public const int GripDoubleClickMs = 700;
+    /// <summary>How far apart the server may see two presses the browser itself counted as a
+    /// double-click.</summary>
+    public const int GripBrowserDoubleClickMs = 2500;
     /// <summary>Width a column with no width at all is treated as while scaling.</summary>
     public const double FallbackWidthPx = 120;
+    /// <summary>Most display texts per column sent to the browser for an every-row best fit.</summary>
+    public const int TextCandidateLimit = 256;
     public const string JsMeasureFunction = "measureColumnContentWidths";
     public const string JsAvailableWidthFunction = "measureGridAvailableWidth";
     private const string ContainerWidthKey = "__fxContainerWidth";
@@ -71,20 +76,34 @@ internal static class ColumnAutoFit
         return (min, max);
     }
 
+    /// <summary>The longest distinct display texts of a column, longest first, at most
+    /// <paramref name="limit"/>. The browser ranks them by their rendered width, so a text with
+    /// wide letters is not lost to a longer one of narrow letters within the limit.</summary>
+    public static string[] LongestTexts(IEnumerable<string?> texts, int limit = TextCandidateLimit)
+        => texts.Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(text => text.Length)
+            .Take(Math.Max(1, limit))
+            .ToArray();
+
     /// <summary>Asks grid-control.js for the intrinsic content width of each field. Returns
     /// null when the DOM is unavailable; the caller then falls back to
     /// <see cref="EstimateWidth"/>. The scroller's client width, when known, is reported
-    /// through <paramref name="onContainerWidth"/> — the ceiling for unbounded columns.</summary>
+    /// through <paramref name="onContainerWidth"/> — the ceiling for unbounded columns.
+    /// <paramref name="texts"/> (field → display texts) adds rows the DOM does not hold: the
+    /// browser measures them in the font of that column's rendered cells.</summary>
     public static async Task<Dictionary<string, double>?> MeasureAsync(
         IJSObjectReference? module, ElementReference host, IReadOnlyList<string> fields,
-        int sampleSize, ColumnAutoFitDomOptions dom, Action<double>? onContainerWidth)
+        int sampleSize, ColumnAutoFitDomOptions dom, Action<double>? onContainerWidth,
+        IReadOnlyDictionary<string, string[]>? texts = null)
     {
         if (module == null || fields.Count == 0)
             return null;
         try
         {
             var measured = await module.InvokeAsync<Dictionary<string, double>?>(
-                JsMeasureFunction, host, fields, Math.Max(1, sampleSize), dom.ToJs());
+                JsMeasureFunction, host, fields, Math.Max(1, sampleSize), dom.ToJs(), texts);
             if (measured != null && measured.TryGetValue(ContainerWidthKey, out var containerPx))
             {
                 measured.Remove(ContainerWidthKey);
@@ -120,9 +139,10 @@ internal static class ColumnAutoFit
     /// to its bounds and rounded. Only columns whose width actually changes are returned.</summary>
     public static List<ColumnWidthChange> ComputeBestFit(
         IReadOnlyList<ColumnAutoFitTarget> targets, IReadOnlyDictionary<string, double>? measured,
-        double gridMin, double gridMax, double ceilingPx)
+        double gridMin, double gridMax, double ceilingPx, double widthScale = 1)
     {
         var changes = new List<ColumnWidthChange>();
+        var scale = double.IsFinite(widthScale) && widthScale >= 1 ? widthScale : 1;
         for (var i = 0; i < targets.Count; i++)
         {
             var target = targets[i];
@@ -134,7 +154,7 @@ internal static class ColumnAutoFit
                 : EstimateWidth(target.HeaderText, target.SampleTexts?.Invoke(), target.IsNumeric);
 
             var (min, max) = ResolveBounds(target.MinWidth, target.MaxWidth, gridMin, gridMax, ceilingPx);
-            var width = Math.Round(Math.Clamp(content, min, max));
+            var width = Math.Round(Math.Clamp(content * scale, min, max));
             if (Math.Abs(target.CurrentWidth - width) < 0.5)
                 continue;
             changes.Add(new ColumnWidthChange(i, target.Field, target.CurrentWidth, width));
@@ -252,12 +272,18 @@ internal sealed class GripDoubleClickDetector
     private DateTime _at;
 
     /// <summary>Records a grip mousedown; true when it completes a double-click on
-    /// <paramref name="field"/> (a third click then starts a fresh pair).</summary>
-    public bool Register(string? field, DateTime now, int windowMs = ColumnAutoFit.GripDoubleClickMs)
+    /// <paramref name="field"/> (a third click then starts a fresh pair).
+    /// <paramref name="clickCount"/> is the browser's own count for the press
+    /// (<c>MouseEventArgs.Detail</c>): the server times the presses only after the network
+    /// has carried them, and jitter on a slow link can stretch a real double-click past
+    /// <paramref name="windowMs"/>.</summary>
+    public bool Register(string? field, DateTime now, long clickCount = 0, int windowMs = ColumnAutoFit.GripDoubleClickMs)
     {
+        var elapsedMs = (now - _at).TotalMilliseconds;
         var isDoubleClick = _field != null
             && string.Equals(_field, field, StringComparison.Ordinal)
-            && (now - _at).TotalMilliseconds <= windowMs;
+            && (elapsedMs <= windowMs
+                || clickCount >= 2 && elapsedMs <= ColumnAutoFit.GripBrowserDoubleClickMs);
         _field = field;
         _at = now;
         if (isDoubleClick)

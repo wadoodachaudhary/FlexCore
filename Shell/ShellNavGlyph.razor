@@ -1,0 +1,18 @@
+@namespace Fx.ControlKit.Shell
+
+@if (Item.Step is { } step)
+{
+    <span class="fx-shell-step-index" aria-hidden="true">@(step.State == ShellStepState.Done ? "✓" : step.Number.ToString())</span>
+}
+else if (Item.IconContent is not null)
+{
+    @Item.IconContent
+}
+else
+{
+    <ShellIconView Icon="Item.Icon" />
+}
+
+@code {
+    [Parameter, EditorRequired] public ShellNavItem Item { get; set; } = default!;
+}

@@ -28,6 +28,13 @@ public sealed class XlsxCell
 
     public bool Bold { get; set; }
 
+    public bool Italic { get; set; }
+
+    public bool Strikethrough { get; set; }
+
+    /// <summary>Font color, 6-digit hex without '#'. Null uses default font color.</summary>
+    public string? FontColorHex { get; set; }
+
     /// <summary>Solid fill, 6-digit hex without '#'. Null leaves the cell unfilled.</summary>
     public string? FillHex { get; set; }
 
@@ -38,6 +45,23 @@ public sealed class XlsxCell
     public string? NumberFormat { get; set; }
 
     public XlsxAlign Align { get; set; } = XlsxAlign.Left;
+
+    internal XlsxCell Copy() => (XlsxCell)MemberwiseClone();
+
+    // Back to a new cell's state, for a row source that reuses its cells. Keep in step with the properties above.
+    internal void Reset()
+    {
+        Value = null;
+        Formula = null;
+        Bold = false;
+        Italic = false;
+        Strikethrough = false;
+        FontColorHex = null;
+        FillHex = null;
+        BorderHex = null;
+        NumberFormat = null;
+        Align = XlsxAlign.Left;
+    }
 }
 
 /// <summary>A single worksheet: a grid of cells plus per-column widths.</summary>
@@ -45,8 +69,20 @@ public sealed class XlsxSheet
 {
     public string Name { get; set; } = "Sheet1";
 
+    /// <summary>Keep text beyond Excel's cell limit inside the workbook, in linked continuation rows.</summary>
+    public bool PreserveOversizedText { get; set; }
+    internal Dictionary<string, string> InternalHyperlinks { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Row-major cells. Ragged rows are allowed.</summary>
     public List<List<XlsxCell>> Rows { get; } = new();
+
+    /// <summary>Rows built on demand instead of held in <see cref="Rows"/>.</summary>
+    internal XlsxRowSource? RowSource { get; init; }
+
+    internal int RowCount => RowSource?.Count ?? Rows.Count;
+
+    /// <summary>Row <paramref name="index"/>. From a row source it is valid only until the next call.</summary>
+    internal List<XlsxCell> RowAt(int index) => RowSource is null ? Rows[index] : RowSource.Row(index);
 
     /// <summary>Explicit Excel character widths by zero-based column index. A column
     /// with no entry is sized from its content.</summary>
@@ -61,6 +97,18 @@ public sealed class XlsxSheet
 }
 
 /// <summary>
+/// Rows produced one at a time, so a sheet built from another model never exists as a whole
+/// cell grid. The writer reads every row in order once per pass; each pass must get the same
+/// rows. A call may reuse the list and the cells it returned last time.
+/// </summary>
+internal abstract class XlsxRowSource
+{
+    public abstract int Count { get; }
+
+    public abstract List<XlsxCell> Row(int index);
+}
+
+/// <summary>
 /// Minimal, dependency-free SpreadsheetML (.xlsx) writer.
 ///
 /// FlexCore only ever *wrote* workbooks on the grid-export and DataTable-export
@@ -71,9 +119,12 @@ public sealed class XlsxSheet
 /// deliberately NOT attempted here.
 ///
 /// Output is a normal OPC zip: [Content_Types].xml, the two rels parts, a
-/// workbook, one worksheet, a shared-string table and a style table.
+/// workbook, worksheets, a shared-string table and a style table. Worksheets and
+/// the shared-string table are written straight into their zip entries, so a
+/// sheet is never held as one string (.NET caps a string at about 1.07 billion
+/// characters, which a wide million-row sheet passes).
 /// </summary>
-public static class XlsxWriter
+public static partial class XlsxWriter
 {
     // Excel serialises dates as days since 1899-12-30 (the "1900 system", including
     // its deliberate 1900 leap-year bug, which DateTime.ToOADate already reproduces).
@@ -81,11 +132,14 @@ public static class XlsxWriter
 
     public static byte[] Write(XlsxSheet sheet)
     {
-        using var buffer = new MemoryStream();
+        // Not a MemoryStream: that keeps each outgrown buffer until a full collection and
+        // then copies itself once more in ToArray.
+        using var buffer = new ChunkedBuffer();
         Write(buffer, sheet);
         return buffer.ToArray();
     }
 
+    /// <summary>Writes the workbook. The sheet is read more than once and must not change until this returns.</summary>
     public static void Write(Stream destination, XlsxSheet sheet)
     {
         ArgumentNullException.ThrowIfNull(destination);
@@ -93,34 +147,56 @@ public static class XlsxWriter
 
         var strings = new SharedStrings();
         var styles = new StyleTable();
+        var sheets = sheet.PreserveOversizedText ? PreserveLongText(sheet) : [sheet];
 
-        // Resolve every cell to a (style index, rendered value) pair up front so the
-        // style and shared-string tables are complete before either part is written.
-        var resolved = new List<List<ResolvedCell?>>(sheet.Rows.Count);
-        foreach (var row in sheet.Rows)
-        {
-            var line = new List<ResolvedCell?>(row.Count);
-            foreach (var cell in row)
-                line.Add(cell is null ? null : Resolve(cell, strings, styles));
-            resolved.Add(line);
-        }
+        // First pass: register every style and shared string and size the content-sized
+        // columns, so styles.xml and sharedStrings.xml are complete before any worksheet.
+        // Nothing per cell is kept; the second pass resolves each cell again as it writes.
+        var others = new Queue<int>();
+        var widths = new double[sheets.Count][];
+        for (var index = 0; index < sheets.Count; index++)
+            widths[index] = Measure(sheets[index], strings, styles, others);
 
         // leaveOpen: callers pass their own stream (FilerControl hands us a file
         // stream it still owns) and must be free to keep using it afterwards.
         using var zip = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
 
-        WriteEntry(zip, "[Content_Types].xml", ContentTypes);
+        WriteEntry(zip, "[Content_Types].xml", BuildContentTypes(sheets.Count));
         WriteEntry(zip, "_rels/.rels", RootRels);
-        WriteEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRels);
-        WriteEntry(zip, "xl/workbook.xml", BuildWorkbook(sheet.Name));
+        WriteEntry(zip, "xl/_rels/workbook.xml.rels", BuildWorkbookRels(sheets.Count));
+        WriteEntry(zip, "xl/workbook.xml", BuildWorkbook(sheets));
         WriteEntry(zip, "xl/styles.xml", styles.ToXml());
-        WriteEntry(zip, "xl/sharedStrings.xml", strings.ToXml());
-        WriteEntry(zip, "xl/worksheets/sheet1.xml", BuildSheet(sheet, resolved));
+        using (var writer = OpenEntry(zip, "xl/sharedStrings.xml"))
+            strings.Write(writer);
+        for (var index = 0; index < sheets.Count; index++)
+        {
+            using var writer = OpenEntry(zip, $"xl/worksheets/sheet{index + 1}.xml");
+            WriteSheet(writer, sheets[index], widths[index], strings, styles, others);
+        }
+        if (others.Count > 0)
+            throw SheetChanged();
     }
 
-    private readonly record struct ResolvedCell(int StyleIndex, string? Type, string? Content, string? Formula);
+    private static InvalidOperationException SheetChanged() => new("The sheet changed while it was being written.");
 
-    private static ResolvedCell Resolve(XlsxCell cell, SharedStrings strings, StyleTable styles)
+    // Longest rendered value: a negative decimal with 29 digits and a point is 31 characters.
+    private const int ValueLength = 64;
+
+    /// <summary>
+    /// Resolves a cell to its style index, cell type and rendered value. The value is
+    /// written into <paramref name="content"/>; the result is its length, or -1 when the
+    /// cell carries no value. A formula cell reports its formula instead.
+    /// </summary>
+    /// <remarks>
+    /// The first pass (<paramref name="register"/>) adds styles and shared strings; the
+    /// second only looks them up, so both passes give every cell the same indices. Text
+    /// from an arbitrary object's ToString is resolved once: its shared-string index is
+    /// queued in the first pass and taken back in the same cell order in the second.
+    /// Rendered values are digits, signs, points and exponents only, so they need no
+    /// XML escaping.
+    /// </remarks>
+    private static int Resolve(XlsxCell cell, SharedStrings strings, StyleTable styles, Queue<int> others, bool register,
+        Span<char> content, out int styleIndex, out string? type, out string? formula)
     {
         var value = cell.Value;
         var numberFormat = cell.NumberFormat;
@@ -136,145 +212,229 @@ public static class XlsxWriter
             };
         }
 
-        var styleIndex = styles.GetIndex(cell.Bold, cell.FillHex, cell.BorderHex, numberFormat, cell.Align);
+        styleIndex = styles.GetIndex(
+            cell.Bold,
+            cell.Italic,
+            cell.Strikethrough,
+            cell.FontColorHex,
+            cell.FillHex,
+            cell.BorderHex,
+            numberFormat,
+            cell.Align);
+        type = null;
+        formula = null;
 
         if (!string.IsNullOrWhiteSpace(cell.Formula))
-            return new ResolvedCell(styleIndex, null, null, cell.Formula);
+        {
+            formula = cell.Formula;
+            return -1;
+        }
 
         switch (value)
         {
             case null:
             case DBNull:
-                return new ResolvedCell(styleIndex, null, null, null);
+                return -1;
 
             case bool b:
-                return new ResolvedCell(styleIndex, "b", b ? "1" : "0", null);
+                type = "b";
+                content[0] = b ? '1' : '0';
+                return 1;
 
             case string s:
-                return new ResolvedCell(styleIndex, "s", strings.GetIndex(s).ToString(CultureInfo.InvariantCulture), null);
+                type = "s";
+                return Format(register ? strings.GetIndex(s) : strings.IndexOf(s), content);
 
             case DateTime dt:
-                return new ResolvedCell(styleIndex, null, Serial(dt.ToOADate()), null);
+                return Serial(dt.ToOADate(), content);
             case DateOnly d:
-                return new ResolvedCell(styleIndex, null, Serial(d.ToDateTime(TimeOnly.MinValue).ToOADate()), null);
+                return Serial(d.ToDateTime(TimeOnly.MinValue).ToOADate(), content);
             case DateTimeOffset dto:
-                return new ResolvedCell(styleIndex, null, Serial(dto.DateTime.ToOADate()), null);
+                return Serial(dto.DateTime.ToOADate(), content);
             case TimeOnly t:
-                return new ResolvedCell(styleIndex, null, Serial(t.ToTimeSpan().TotalDays), null);
+                return Serial(t.ToTimeSpan().TotalDays, content);
             case TimeSpan ts:
-                return new ResolvedCell(styleIndex, null, Serial(ts.TotalDays), null);
+                return Serial(ts.TotalDays, content);
 
             case byte or sbyte or short or ushort or int or uint or long:
-                return new ResolvedCell(styleIndex, null,
-                    Convert.ToInt64(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture), null);
+                return Format(Convert.ToInt64(value, CultureInfo.InvariantCulture), content);
             case ulong u when u <= long.MaxValue:
-                return new ResolvedCell(styleIndex, null, ((long)u).ToString(CultureInfo.InvariantCulture), null);
+                return Format((long)u, content);
             case ulong u:
-                return new ResolvedCell(styleIndex, null, Serial((double)u), null);
+                return Serial((double)u, content);
             case decimal m:
-                return new ResolvedCell(styleIndex, null, m.ToString(CultureInfo.InvariantCulture), null);
+                return Format(m, content);
 
             // Non-finite doubles have no XLSX numeric representation; ClosedXML's
             // behaviour here was to fall back to text, so keep that.
             case double dbl when double.IsNaN(dbl) || double.IsInfinity(dbl):
-                return new ResolvedCell(styleIndex, "s",
-                    strings.GetIndex(dbl.ToString(CultureInfo.InvariantCulture)).ToString(CultureInfo.InvariantCulture), null);
+                type = "s";
+                return Format(SharedIndex(dbl.ToString(CultureInfo.InvariantCulture), strings, register), content);
             case double dbl:
-                return new ResolvedCell(styleIndex, null, Serial(dbl), null);
+                return Serial(dbl, content);
             case float f when float.IsNaN(f) || float.IsInfinity(f):
-                return new ResolvedCell(styleIndex, "s",
-                    strings.GetIndex(f.ToString(CultureInfo.InvariantCulture)).ToString(CultureInfo.InvariantCulture), null);
+                type = "s";
+                return Format(SharedIndex(f.ToString(CultureInfo.InvariantCulture), strings, register), content);
             case float f:
-                return new ResolvedCell(styleIndex, null, Serial(f), null);
+                return Serial(f, content);
 
             default:
-                var text = Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
-                return new ResolvedCell(styleIndex, "s", strings.GetIndex(text).ToString(CultureInfo.InvariantCulture), null);
+                type = "s";
+                int index;
+                if (register)
+                {
+                    index = strings.GetIndex(Convert.ToString(value, CultureInfo.InvariantCulture) ?? "");
+                    others.Enqueue(index);
+                }
+                else if (!others.TryDequeue(out index))
+                {
+                    throw SheetChanged();
+                }
+                return Format(index, content);
         }
     }
 
-    private static string Serial(double value)
+    private static int SharedIndex(string text, SharedStrings strings, bool register) =>
+        register ? strings.GetIndex(text) : strings.IndexOf(text);
+
+    private static int Format<T>(T value, Span<char> content) where T : ISpanFormattable =>
+        value.TryFormat(content, out var written, default, CultureInfo.InvariantCulture)
+            ? written
+            : throw new InvalidOperationException("Cell value exceeds the render buffer.");
+
+    private static int Serial(double value, Span<char> content)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
-            return "0";
+        {
+            content[0] = '0';
+            return 1;
+        }
         if (value < OaDateFloor)
             value = OaDateFloor;
-        return value.ToString("R", CultureInfo.InvariantCulture);
+        return value.TryFormat(content, out var written, "R", CultureInfo.InvariantCulture)
+            ? written
+            : throw new InvalidOperationException("Cell value exceeds the render buffer.");
     }
 
-    private static string BuildSheet(XlsxSheet sheet, List<List<ResolvedCell?>> resolved)
+    // Registers the sheet's styles and shared strings and returns its column widths.
+    private static double[] Measure(XlsxSheet sheet, SharedStrings strings, StyleTable styles, Queue<int> others)
     {
-        var sb = new StringBuilder(1024);
-        sb.Append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""");
-        sb.Append("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""");
-
-        var columnCount = resolved.Count == 0 ? 0 : resolved.Max(r => r.Count);
-        if (columnCount > 0)
+        var widest = new List<int>();
+        Span<char> content = stackalloc char[ValueLength];
+        for (var r = 0; r < sheet.RowCount; r++)
         {
-            sb.Append("<cols>");
-            for (var c = 0; c < columnCount; c++)
-            {
-                var width = sheet.ColumnWidths.TryGetValue(c, out var explicitWidth)
-                    ? explicitWidth
-                    : MeasureColumn(resolved, c);
-                sb.Append(CultureInfo.InvariantCulture,
-                    $"""<col min="{c + 1}" max="{c + 1}" width="{width.ToString("0.##", CultureInfo.InvariantCulture)}" customWidth="1"/>""");
-            }
-            sb.Append("</cols>");
-        }
-
-        sb.Append("<sheetData>");
-        for (var r = 0; r < resolved.Count; r++)
-        {
-            var row = resolved[r];
-            sb.Append(CultureInfo.InvariantCulture, $"""<row r="{r + 1}">""");
+            var row = sheet.RowAt(r);
+            while (widest.Count < row.Count)
+                widest.Add(0);
             for (var c = 0; c < row.Count; c++)
             {
-                var cell = row[c];
-                if (cell is null)
+                if (row[c] is not { } cell)
+                    continue;
+                var length = Resolve(cell, strings, styles, others, register: true, content, out _, out _, out var formula);
+                length = formula?.Length ?? Math.Max(length, 0);
+                if (length > widest[c])
+                    widest[c] = length;
+            }
+        }
+
+        var widths = new double[widest.Count];
+        for (var c = 0; c < widths.Length; c++)
+            widths[c] = sheet.ColumnWidths.TryGetValue(c, out var explicitWidth) ? explicitWidth : MeasureColumn(widest[c]);
+        return widths;
+    }
+
+    private static void WriteSheet(TextWriter writer, XlsxSheet sheet, double[] widths, SharedStrings strings, StyleTable styles,
+        Queue<int> others)
+    {
+        writer.Write("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""");
+        writer.Write("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""");
+
+        if (widths.Length > 0)
+        {
+            writer.Write("<cols>");
+            for (var c = 0; c < widths.Length; c++)
+            {
+                writer.Write(string.Create(CultureInfo.InvariantCulture,
+                    $"""<col min="{c + 1}" max="{c + 1}" width="{widths[c].ToString("0.##", CultureInfo.InvariantCulture)}" customWidth="1"/>"""));
+            }
+            writer.Write("</cols>");
+        }
+
+        writer.Write("<sheetData>");
+        var columns = new string?[widths.Length];
+        Span<char> content = stackalloc char[ValueLength];
+        Span<char> number = stackalloc char[16];
+        Span<char> styleText = stackalloc char[16];
+        for (var r = 0; r < sheet.RowCount; r++)
+        {
+            var row = sheet.RowAt(r);
+            var rowNumber = number[..Format(r + 1, number)];
+            writer.Write("<row r=\"");
+            writer.Write(rowNumber);
+            writer.Write("\">");
+            for (var c = 0; c < row.Count; c++)
+            {
+                if (row[c] is not { } cell)
                     continue;
 
-                var reference = $"{ColumnName(c)}{r + 1}";
-                var style = cell.Value.StyleIndex;
+                var length = Resolve(cell, strings, styles, others, register: false, content, out var style, out var type, out var formula);
 
                 // An empty, unstyled cell carries no information — omit it entirely.
-                if (cell.Value.Content is null && cell.Value.Formula is null && style == 0)
+                if (length < 0 && formula is null && style == 0)
                     continue;
 
-                sb.Append(CultureInfo.InvariantCulture, $"""<c r="{reference}" s="{style}" """);
-                if (cell.Value.Type is not null)
-                    sb.Append(CultureInfo.InvariantCulture, $"""t="{cell.Value.Type}" """);
-                sb.Append('>');
+                writer.Write("<c r=\"");
+                writer.Write(columns[c] ??= ColumnName(c));
+                writer.Write(rowNumber);
+                writer.Write("\" s=\"");
+                writer.Write(styleText[..Format(style, styleText)]);
+                writer.Write("\" ");
+                if (type is not null)
+                {
+                    writer.Write("t=\"");
+                    writer.Write(type);
+                    writer.Write("\" ");
+                }
+                writer.Write('>');
 
-                if (cell.Value.Formula is not null)
-                    sb.Append("<f>").Append(Escape(cell.Value.Formula)).Append("</f>");
-                else if (cell.Value.Content is not null)
-                    sb.Append("<v>").Append(Escape(cell.Value.Content)).Append("</v>");
+                if (formula is not null)
+                {
+                    writer.Write("<f>");
+                    WriteEscaped(writer, formula);
+                    writer.Write("</f>");
+                }
+                else if (length >= 0)
+                {
+                    writer.Write("<v>");
+                    writer.Write(content[..length]);
+                    writer.Write("</v>");
+                }
 
-                sb.Append("</c>");
+                writer.Write("</c>");
             }
-            sb.Append("</row>");
+            writer.Write("</row>");
         }
-        sb.Append("</sheetData></worksheet>");
-        return sb.ToString();
+        writer.Write("</sheetData>");
+        if (sheet.InternalHyperlinks.Count > 0)
+        {
+            writer.Write("<hyperlinks>");
+            foreach (var (cell, target) in sheet.InternalHyperlinks)
+            {
+                writer.Write("<hyperlink ref=\"");
+                WriteEscaped(writer, cell);
+                writer.Write("\" location=\"");
+                WriteEscaped(writer, target);
+                writer.Write("\"/>");
+            }
+            writer.Write("</hyperlinks>");
+        }
+        writer.Write("</worksheet>");
     }
 
     // Content-based sizing, standing in for ClosedXML's AdjustToContents. Shared
     // strings are the only content whose display length we know cheaply; numbers are
     // close enough at their serialised length.
-    private static double MeasureColumn(List<List<ResolvedCell?>> resolved, int column)
-    {
-        var widest = 0;
-        foreach (var row in resolved)
-        {
-            if (column >= row.Count || row[column] is not { } cell)
-                continue;
-            var length = cell.Formula?.Length ?? cell.Content?.Length ?? 0;
-            if (length > widest)
-                widest = length;
-        }
-        return Math.Clamp(widest + 2, 8.43, 80);
-    }
+    private static double MeasureColumn(int widest) => Math.Clamp(widest + 2, 8.43, 80);
 
     private static string BuildWorkbook(string sheetName) =>
         $"""
@@ -306,8 +466,57 @@ public static class XlsxWriter
         return name;
     }
 
-    private static string Escape(string value) =>
-        new XmlDocument().CreateTextNode(value).OuterXml;
+    private static string Escape(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        WriteEscaped(writer, value);
+        return writer.ToString();
+    }
+
+    private static void WriteEscaped(TextWriter writer, string value)
+    {
+        var run = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            var entity = ch switch
+            {
+                '&' => "&amp;",
+                '<' => "&lt;",
+                '>' => "&gt;",
+                '"' => "&quot;",
+                '\'' => "&apos;",
+                _ => null
+            };
+            if (entity is null)
+            {
+                // A surrogate pair is one character outside the Basic Multilingual Plane
+                // (emoji, CJK Extension B). IsXmlChar rejects each half on its own, so the
+                // pair is kept together and only lone surrogates are dropped.
+                if (char.IsHighSurrogate(ch) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                {
+                    i++;
+                    continue;
+                }
+                if (XmlConvert.IsXmlChar(ch))
+                    continue;
+            }
+            writer.Write(value.AsSpan(run, i - run));
+            if (entity is not null)
+                writer.Write(entity);
+            run = i + 1;
+        }
+        writer.Write(value.AsSpan(run));
+    }
+
+    // 16K chars keeps the writer's char and byte buffers off the large-object heap.
+    private static StreamWriter OpenEntry(ZipArchive zip, string path) =>
+        new(zip.CreateEntry(path, CompressionLevel.Optimal).Open(), Utf8NoMark, 1 << 14);
+
+    // Encoding.UTF8.GetBytes never writes a byte-order mark; a StreamWriter would.
+    private static readonly UTF8Encoding Utf8NoMark = new(encoderShouldEmitUTF8Identifier: false);
 
     private static void WriteEntry(ZipArchive zip, string path, string xml)
     {
@@ -315,6 +524,54 @@ public static class XlsxWriter
         using var stream = entry.Open();
         var bytes = Encoding.UTF8.GetBytes(xml);
         stream.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void WriteSpreadsheetText(TextWriter writer, string value)
+    {
+        // ST_Xstring: preserve CR/control characters and literal _xHHHH_ text through Excel's decoder.
+        var run = 0;
+        Span<char> code = stackalloc char[4];
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '_' && i + 6 < value.Length && value[i + 1] == 'x' && value[i + 6] == '_'
+                && value.AsSpan(i + 2, 4).IndexOfAnyExcept("0123456789ABCDEFabcdef") < 0)
+            {
+                writer.Write(value.AsSpan(run, i - run));
+                writer.Write("_x005F_");
+            }
+            else if (char.IsHighSurrogate(ch) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+                continue;
+            }
+            else if (ch == '\r' || !XmlConvert.IsXmlChar(ch))
+            {
+                writer.Write(value.AsSpan(run, i - run));
+                ((int)ch).TryFormat(code, out _, "X4", CultureInfo.InvariantCulture);
+                writer.Write("_x");
+                writer.Write(code);
+                writer.Write('_');
+            }
+            else
+            {
+                var entity = ch switch
+                {
+                    '&' => "&amp;",
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    '"' => "&quot;",
+                    '\'' => "&apos;",
+                    _ => null
+                };
+                if (entity is null)
+                    continue;
+                writer.Write(value.AsSpan(run, i - run));
+                writer.Write(entity);
+            }
+            run = i + 1;
+        }
+        writer.Write(value.AsSpan(run));
     }
 
     private const string ContentTypes = """
@@ -347,16 +604,21 @@ public static class XlsxWriter
             return next;
         }
 
-        public string ToXml()
+        /// <summary>Index of a string already registered, without counting another use.</summary>
+        public int IndexOf(string value) => _index.TryGetValue(value, out var index) ? index : throw SheetChanged();
+
+        public void Write(TextWriter writer)
         {
-            var sb = new StringBuilder();
-            sb.Append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""");
-            sb.Append(CultureInfo.InvariantCulture,
-                $"""<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{_total}" uniqueCount="{_values.Count}">""");
+            writer.Write("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""");
+            writer.Write(string.Create(CultureInfo.InvariantCulture,
+                $"""<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{_total}" uniqueCount="{_values.Count}">"""));
             foreach (var value in _values)
-                sb.Append("<si><t xml:space=\"preserve\">").Append(Escape(value)).Append("</t></si>");
-            sb.Append("</sst>");
-            return sb.ToString();
+            {
+                writer.Write("<si><t xml:space=\"preserve\">");
+                WriteSpreadsheetText(writer, value);
+                writer.Write("</t></si>");
+            }
+            writer.Write("</sst>");
         }
     }
 
@@ -367,31 +629,71 @@ public static class XlsxWriter
     /// </summary>
     private sealed class StyleTable
     {
-        private readonly record struct Key(bool Bold, string? Fill, string? Border, string? NumberFormat, XlsxAlign Align);
+        private readonly record struct FontKey(bool Bold, bool Italic, bool Strikethrough, string? Color);
+        private readonly record struct Key(FontKey Font, string? Fill, string? Border, string? NumberFormat, XlsxAlign Align);
+
+        private readonly record struct RawKey(bool Bold, bool Italic, bool Strikethrough, string? FontColor, string? Fill,
+            string? Border, string? NumberFormat, XlsxAlign Align);
 
         private readonly Dictionary<Key, int> _xfIndex = new();
+        private const int RawCacheLimit = 4096;
+        private readonly Dictionary<RawKey, int> _rawIndex = new();
         private readonly List<Key> _xfs = new();
+        private readonly List<FontKey> _fonts = new();
         private readonly List<string> _fills = new();
         private readonly List<string> _borders = new();
         private readonly List<string> _numberFormats = new();
 
         public StyleTable()
         {
-            // cellXfs[0] must be the default style.
+            // fonts[0] and cellXfs[0] must be the default style.
+            _fonts.Add(default);
             _xfs.Add(default);
             _xfIndex[default] = 0;
         }
 
-        public int GetIndex(bool bold, string? fill, string? border, string? numberFormat, XlsxAlign align)
+        public int GetIndex(
+            bool bold,
+            bool italic,
+            bool strikethrough,
+            string? fontColor,
+            string? fill,
+            string? border,
+            string? numberFormat,
+            XlsxAlign align)
         {
+            // The same inputs always normalise to the same key, so they map to the same index.
+            // Bounded: callers passing endless spellings of a few styles fall back to Register.
+            var raw = new RawKey(bold, italic, strikethrough, fontColor, fill, border, numberFormat, align);
+            if (_rawIndex.TryGetValue(raw, out var known))
+                return known;
+            var index = Register(bold, italic, strikethrough, fontColor, fill, border, numberFormat, align);
+            if (_rawIndex.Count < RawCacheLimit)
+                _rawIndex[raw] = index;
+            return index;
+        }
+
+        private int Register(
+            bool bold,
+            bool italic,
+            bool strikethrough,
+            string? fontColor,
+            string? fill,
+            string? border,
+            string? numberFormat,
+            XlsxAlign align)
+        {
+            fontColor = Normalize(fontColor);
             fill = Normalize(fill);
             border = Normalize(border);
             numberFormat = string.IsNullOrWhiteSpace(numberFormat) ? null : numberFormat.Trim();
 
-            var key = new Key(bold, fill, border, numberFormat, align);
+            var font = new FontKey(bold, italic, strikethrough, fontColor);
+            var key = new Key(font, fill, border, numberFormat, align);
             if (_xfIndex.TryGetValue(key, out var existing))
                 return existing;
 
+            if (!_fonts.Contains(font)) _fonts.Add(font);
             if (fill is not null && !_fills.Contains(fill)) _fills.Add(fill);
             if (border is not null && !_borders.Contains(border)) _borders.Add(border);
             if (numberFormat is not null && !_numberFormats.Contains(numberFormat)) _numberFormats.Add(numberFormat);
@@ -425,7 +727,22 @@ public static class XlsxWriter
                 sb.Append("</numFmts>");
             }
 
-            sb.Append("""<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>""");
+            sb.Append(CultureInfo.InvariantCulture, $"""<fonts count="{_fonts.Count}">""");
+            foreach (var font in _fonts)
+            {
+                sb.Append("<font>");
+                if (font.Bold)
+                    sb.Append("<b/>");
+                if (font.Italic)
+                    sb.Append("<i/>");
+                if (font.Strikethrough)
+                    sb.Append("<strike/>");
+                sb.Append("""<sz val="11"/>""");
+                if (font.Color is not null)
+                    sb.Append(CultureInfo.InvariantCulture, $"""<color rgb="FF{font.Color}"/>""");
+                sb.Append("""<name val="Calibri"/></font>""");
+            }
+            sb.Append("</fonts>");
 
             // Excel requires fills[0]=none and fills[1]=gray125; custom fills follow.
             sb.Append(CultureInfo.InvariantCulture, $"""<fills count="{_fills.Count + 2}">""");
@@ -450,7 +767,7 @@ public static class XlsxWriter
             sb.Append(CultureInfo.InvariantCulture, $"""<cellXfs count="{_xfs.Count}">""");
             foreach (var xf in _xfs)
             {
-                var fontId = xf.Bold ? 1 : 0;
+                var fontId = _fonts.IndexOf(xf.Font);
                 var fillId = xf.Fill is null ? 0 : _fills.IndexOf(xf.Fill) + 2;
                 var borderId = xf.Border is null ? 0 : _borders.IndexOf(xf.Border) + 1;
                 var numFmtId = xf.NumberFormat is null ? 0 : 164 + _numberFormats.IndexOf(xf.NumberFormat);

@@ -5,7 +5,7 @@ public enum ChartType
     // Comparison
     Bar, HorizontalBar, GroupedBar, StackedBar, StackedBar100,
     // Trend over time
-    Line, MultiLine, Spline, StepLine, Area, StackedArea, Sparkline,
+    Surface, Line, MultiLine, Spline, StepLine, Area, StackedArea, Sparkline,
     // Part-to-whole
     Pie, Donut, Treemap, Funnel, Pyramid, Sunburst,
     // Distribution

@@ -6,8 +6,10 @@ namespace Fx.ControlKit.Grid;
 /// Defines a column in the GridControl. Equivalent to SyncFusion's GridColumn.
 /// Configured as a child component of GridColumns.
 /// </summary>
-public class GridColumn : ComponentBase, IDisposable
+public class GridColumn : FlexKitControlBase, IDisposable
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Field) ? Field : HeaderText;
     [CascadingParameter] internal GridColumnsBase? Parent { get; set; }
 
     [Parameter] public string Field { get; set; } = "";
@@ -25,9 +27,9 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
     /// <summary>Cell text alignment. Unset defaults by column type:
     /// <see cref="ColumnType.CheckBox"/> columns centre (vsFlexGrid
-    /// flexcpChecked parity — the check box sits in the middle of its cell,
-    /// HHM-901); <see cref="ColumnType.Date"/> columns right-align (vsFlexGrid
-    /// flexDTDate parity, HHM-920); everything else left-aligns. Set explicitly to override —
+    /// flexcpChecked parity — the check box sits in the middle of its cell);
+    /// <see cref="ColumnType.Date"/> columns right-align (vsFlexGrid
+    /// flexDTDate parity); everything else left-aligns. Set explicitly to override —
     /// except that on a CheckBox column only Right is honoured as an
     /// override (see <see cref="ResolvedTextAlign"/> for why).
     /// Mirrors <see cref="TreeGridColumn.TextAlign"/>.</summary>
@@ -44,9 +46,9 @@ public class GridColumn : ComponentBase, IDisposable
             // pass the enum default Left on EVERY column — so on CheckBox
             // columns only an explicit Right counts as an override; Left (set
             // or unset) resolves to Center. Honouring Left here would defeat
-            // the default for every layout-driven grid (HHM-901).
+            // the default for every layout-driven grid.
             ? (TextAlign == Grid.TextAlign.Right ? Grid.TextAlign.Right : Grid.TextAlign.Center)
-            // Date columns right-align (vsFlexGrid flexDTDate parity, HHM-920).
+            // Date columns right-align (vsFlexGrid flexDTDate parity).
             // Restored 2026-09-08: the 2026-09-07 FlexCore sync had dropped it.
             : (TextAlign ?? (Type == ColumnType.Date ? Grid.TextAlign.Right : Grid.TextAlign.Left));
     /// <summary>
@@ -132,6 +134,9 @@ public class GridColumn : ComponentBase, IDisposable
 
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowHiding { get; set; } = true;
+    /// <summary>Allows changing the caption through the header menu. Set false
+    /// when the host manages this column's caption through another workflow.</summary>
+    [Parameter] public bool AllowRenaming { get; set; } = true;
     /// <summary>
     /// Allows this column to participate in single-cell column drag selection
     /// even when <see cref="AllowEditing"/> is false. Use for lookup/picker
@@ -249,6 +254,14 @@ public class GridColumn : ComponentBase, IDisposable
 
     /// <summary>Custom header template.</summary>
     [Parameter] public RenderFragment? HeaderTemplate { get; set; }
+
+    /// <summary>
+    /// Content rendered in the header cell after the caption, the sort arrow and the search (filter) icon,
+    /// e.g. a name that labels the whole list. A click on it acts as a click anywhere else on the header.
+    /// Column best fit measures the caption and icons only, so a resizable column with a suffix needs a
+    /// Width that leaves room for it.
+    /// </summary>
+    [Parameter] public RenderFragment? HeaderSuffixTemplate { get; set; }
 
     /// <summary>Custom edit template. Context is the row data item.</summary>
     [Parameter] public RenderFragment<object>? EditTemplate { get; set; }

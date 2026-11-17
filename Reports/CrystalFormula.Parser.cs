@@ -29,6 +29,16 @@ public sealed partial class CrystalFormula
         return new($"Invalid Crystal formula: {message} (Line {line}, Column {column}).");
     }
 
+    // Metadata needs references even when a formula calls a function the evaluator does not implement.
+    // Reuse the bounded lexer so strings and Crystal/Basic comments never become dependencies.
+    internal static IReadOnlyList<string> ReadFieldReferences(string text, string syntax = "Crystal")
+    {
+        if (text.Length > 32768) throw new InvalidDataException("Formula exceeds the 32 KB limit.");
+        if (!IsSupportedSyntax(syntax)) throw new NotSupportedException($"Formula syntax '{syntax}' is not implemented.");
+        return Tokenize(text, IsBasicSyntax(syntax)).Where(token => token.Kind == TokenKind.Field)
+            .Select(token => token.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static List<Token> Tokenize(string text, bool basic = false)
     {
         var tokens = new List<Token>(); var i = 0;
@@ -136,7 +146,7 @@ public sealed partial class CrystalFormula
         {
             if (Current.Kind != TokenKind.End) throw Fail("end of formula expected");
             foreach (var call in Walk(root).OfType<Call>())
-                if (!Functions.Contains(call.Name)) throw new NotSupportedException($"Crystal function '{call.Name}' is not implemented.");
+                if (!Functions.Contains(call.Name) && !GridFunctions.Contains(call.Name)) throw new NotSupportedException($"Crystal function '{call.Name}' is not implemented.");
         }
         protected Token Current => _tokens[_index];
         protected bool IsSymbol(string value) => Current.Kind == TokenKind.Symbol && Current.Value == value;
@@ -216,9 +226,9 @@ public sealed partial class CrystalFormula
             var args = new List<Node>();
             if (!Accept(close)) { do args.Add(ParseExpression()); while (Accept(",")); Expect(close); }
             if (args.Count == 0 && !Functions.Contains(name) && KnownSymbol(name)) return new Symbol(name);
-            if (!Functions.Contains(name) && _functions is CrystalCustomFunctionLibrary library && library.Errors.TryGetValue(name, out var reason))
+            if (!Functions.Contains(name) && !GridFunctions.Contains(name) && _functions is CrystalCustomFunctionLibrary library && library.Errors.TryGetValue(name, out var reason))
                 throw new InvalidDataException($"Custom function '{name}' cannot be used: {reason}");
-            return !Functions.Contains(name) && _functions?.ContainsKey(name) == true ? new CustomCall(name, args.ToArray(), _functions) : new Call(name, args.ToArray());
+            return !Functions.Contains(name) && !GridFunctions.Contains(name) && _functions?.ContainsKey(name) == true ? new CustomCall(name, args.ToArray(), _functions) : new Call(name, args.ToArray());
         }
         protected Node? ParseOptionLoop()
         {

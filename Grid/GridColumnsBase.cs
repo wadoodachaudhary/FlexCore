@@ -8,8 +8,9 @@ namespace Fx.ControlKit.Grid;
 /// Acts as a CascadingValue so columns can register themselves.
 /// Also registers itself with the parent GridControl via cascading parameter.
 /// </summary>
-public class GridColumnsBase : ComponentBase, IDisposable
+public class GridColumnsBase : FlexKitControlBase, IDisposable
 {
+    protected override string? ResolveControlIdentifier() => DebugTag;
     private readonly List<GridColumn> _columns = new();
 
     [CascadingParameter] internal IGridOwner? ParentGrid { get; set; }

@@ -11,43 +11,53 @@
     flex-direction: column;
     flex: 1 1 0;
     min-width: 160px;
+    width: var(--fx-dual-pane-width, auto);
 }
 
-.fx-dual-header {
-    font-size: calc(12px * var(--fx-zoom, 1));
-    font-weight: 600;
-    color: #495057;
-    margin-bottom: 4px;
-}
-
-.fx-dual-select {
-    flex: 1 1 auto;
-    min-height: 180px;
-    padding: 4px;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
+/* Each pane is a one-column grid: compact rows, the header carries the search and sort. */
+.fx-dual-pane ::deep .fx-dual-grid {
+    --fx-grid-active-cell-border: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
     background: #fff;
-    font-size: calc(13px * var(--fx-zoom, 1));
-    overflow: auto;
+    font-size: calc(12px * var(--fx-zoom, 1));
 }
-.fx-dual-select:focus {
-    outline: 2px solid #0d6efd33;
-    border-color: #0d6efd;
+.fx-dual-pane ::deep .fx-dual-grid .fx-header-cell {
+    border: 0;
+    box-shadow: none;
 }
-
-.fx-dual-select option {
-    padding: 2px 6px;
+.fx-dual-pane ::deep .fx-dual-grid .fx-grid-table td {
+    padding-top: 2px;
+    padding-bottom: 2px;
+    line-height: 1.2;
 }
-.fx-dual-select option:checked {
-    background: #cfe2ff;
-    color: #084298;
+.fx-dual-pane ::deep .fx-dual-grid .fx-grid-table th {
+    padding-top: 1px;
+    padding-bottom: 1px;
 }
 
 .fx-dual-meta {
     font-size: calc(11px * var(--fx-zoom, 1));
-    color: #6c757d;
-    margin-top: 4px;
+    line-height: 1.3;
+    color: #4b5563;
+    margin-top: 2px;
     text-align: right;
+}
+
+/* The pane's name (e.g. the report parameter) on the header line, after the caption and its search icon,
+   in the header's own text colour. The header cell clips: a name too long for the pane ends in an
+   ellipsis (its tooltip shows it whole) instead of widening the grid, whatever the caption and zoom. */
+.fx-dual-caption {
+    margin-left: 10px;
+    font-size: calc(12px * var(--fx-zoom, 1));
+    font-weight: 700;
+    color: inherit;
+}
+
+.fx-dual-pane ::deep .fx-dual-grid .fx-header-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .fx-dual-buttons {
@@ -55,29 +65,44 @@
     flex-direction: column;
     justify-content: center;
     align-items: stretch;
-    gap: 4px;
-    padding-top: 18px; /* align with the select after the header line */
+    gap: 5px;
+    padding-top: 18px; /* align with the grid body after the header line */
 }
 
-.fx-dual-btn {
-    min-width: 40px;
-    padding: 4px 8px;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
-    background: #f8f9fa;
+.fx-dual-buttons ::deep .fx-dual-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 38px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid #9a9a9a;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #ffffff 0%, #f3f5f8 100%);
+    color: #1f3a52;
     cursor: pointer;
-    font-family: monospace;
-    font-size: calc(14px * var(--fx-zoom, 1));
-    font-weight: 600;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
 }
-.fx-dual-btn:hover:not(:disabled) {
-    background: #e9ecef;
-    border-color: #adb5bd;
+.fx-dual-buttons ::deep .fx-dual-btn:hover:not(:disabled) {
+    background: #dcebfa;
+    border-color: #3b78b5;
+    color: #084270;
 }
-.fx-dual-btn:active:not(:disabled) {
-    background: #dee2e6;
+.fx-dual-buttons ::deep .fx-dual-btn:active:not(:disabled) {
+    background: #cbe0f5;
+    border-color: #2b6299;
 }
-.fx-dual-btn:disabled {
-    opacity: 0.45;
+.fx-dual-buttons ::deep .fx-dual-btn:disabled {
+    background: #f0f2f5;
+    border-color: #c5cad3;
+    color: #9aa2af;
+    opacity: 0.65;
+    box-shadow: none;
     cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+    .fx-dual-list { flex-direction: column; }
+    .fx-dual-pane { min-width: 0; }
+    .fx-dual-buttons { flex-direction: row; justify-content: center; padding-top: 0; }
 }

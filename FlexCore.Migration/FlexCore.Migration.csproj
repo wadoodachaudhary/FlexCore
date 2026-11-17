@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- Migration tooling for code-migration hosts: the converter shell, program preview, translated-artifact
+       viewers and the Crystal samples pack. A satellite of FlexCore, so the published library carries neither
+       this code, its Sqlite dependency nor the samples database. Never packed. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Fx.ControlKit</RootNamespace>
+    <AssemblyName>FlexCore.Migration</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- CrystalSampleDatabase.Path is Reports/CrystalSamples/CrystalSamples.db under the application base directory. -->
+    <None Update="Reports\CrystalSamples\CrystalSamples.db" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FlexCore.RegressionTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FlexCore.csproj" />
+  </ItemGroup>
+
+</Project>

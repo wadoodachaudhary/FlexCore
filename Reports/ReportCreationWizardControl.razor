@@ -701,7 +701,10 @@
         try
         {
             var query = ReportDesignerSqlBuilder.BuildQuery(_selectedTables, ReportFields, _links, _filters, topRows: 100);
-            var table = executor.Execute(_sqlEditedByUser ? _customSql : query.Sql, query.Parameters);
+            var sql = _sqlEditedByUser ? _customSql : query.Sql;
+            // Typed SQL meets the host's custom-SQL policy before it runs; a refusal is the validation result.
+            if (_sqlEditedByUser) Services.GetService<ReportOptions>()?.ValidateCustomSql?.Invoke(sql);
+            var table = executor.Execute(sql, query.Parameters);
             _sqlValidationMessage = $"SQL valid. Returned {table.Rows.Count} rows and {table.Columns.Count} columns.";
             _sqlValidationSucceeded = true;
         }

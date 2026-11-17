@@ -224,3 +224,69 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* === Hover tooltips (2026-10-31) === */
+.fx-chart svg .fx-pt {
+    cursor: default;
+    transition: filter 0.12s ease, opacity 0.12s ease;
+}
+
+.fx-chart svg .fx-pt:hover {
+    filter: brightness(1.12) saturate(1.08);
+}
+
+.fx-chart svg path.fx-pt:hover,
+.fx-chart svg polygon.fx-pt:hover {
+    stroke-width: 3;
+}
+
+/* the hovered shape stays full strength, its neighbours step back */
+.fx-chart svg:has(.fx-pt:hover) .fx-pt:not(:hover) {
+    opacity: 0.72;
+}
+
+.fx-chart-tooltip {
+    position: fixed;
+    z-index: 1100;
+    transform: translate(14px, 14px);
+    pointer-events: none;
+    background: rgba(17, 24, 39, 0.94);
+    color: #ffffff;
+    padding: 8px 11px;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    font-size: calc(12px * var(--fx-zoom, 1));
+    line-height: 1.45;
+    min-width: 120px;
+    max-width: 280px;
+    white-space: nowrap;
+}
+
+.fx-chart-tooltip.fx-tip-left { transform: translate(calc(-100% - 14px), 14px); }
+.fx-chart-tooltip.fx-tip-up { transform: translate(14px, calc(-100% - 14px)); }
+.fx-chart-tooltip.fx-tip-left.fx-tip-up { transform: translate(calc(-100% - 14px), calc(-100% - 14px)); }
+
+.fx-chart-tooltip-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.fx-chart-tooltip-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: none;
+}
+
+.fx-chart-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.fx-chart-tooltip-row b {
+    font-weight: 600;
+}

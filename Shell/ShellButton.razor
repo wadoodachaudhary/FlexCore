@@ -1,0 +1,11 @@
+@namespace Fx.ControlKit.Shell
+
+<button type="button" class="@CssClass" disabled="@Disabled" aria-label="@AriaLabel" @onclick="OnClick">@ChildContent</button>
+
+@code {
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

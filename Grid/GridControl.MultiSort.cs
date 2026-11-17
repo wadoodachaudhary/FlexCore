@@ -209,7 +209,7 @@ public partial class GridControl<TValue>
                 GetColumnState(sort.Field).SortDirection = sort.Direction;
                 _sortPriorityFields.Add(sort.Field);
             }
-            _pageState.CurrentPage = 1;
+            ResetToFirstPage();
             ClearPassViewMemos();
             InvalidateBlazorServerOptimizationCaches();
 
@@ -219,6 +219,7 @@ public partial class GridControl<TValue>
             await SelectFirstVisibleRowAsync(force: true);
 
             _showSortDialog = false;
+            LogGridAction("Sorted", string.Join(", ", sorts.Select(s => $"{s.Field} {s.Direction}")), "MultiSort");
             if (EventsRef?.Sorted.HasDelegate == true)
                 foreach (var sort in sorts)
                     await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = sort.Field, Direction = sort.Direction });

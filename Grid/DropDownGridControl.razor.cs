@@ -9,7 +9,7 @@ using Microsoft.JSInterop;
 
 namespace Fx.ControlKit.Grid;
 
-public partial class DropDownGridControl<TItem, TValue> : ComponentBase, IAsyncDisposable
+public partial class DropDownGridControl<TItem, TValue> : Fx.ControlKit.FlexKitControlBase, IAsyncDisposable
 {
     [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
 

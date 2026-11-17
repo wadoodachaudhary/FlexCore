@@ -1,0 +1,94 @@
+@namespace Fx.ControlKit.Shell
+
+<section class="fx-shell-home" aria-label="@Title">
+    <header class="fx-shell-home-head">
+        <h1>@Title</h1>
+        @if (!string.IsNullOrWhiteSpace(Subtitle))
+        {
+            <p>@Subtitle</p>
+        }
+    </header>
+
+    @if (CardList.Count > 0)
+    {
+        <div class="fx-shell-block">
+            <h2>@GetStartedTitle</h2>
+            <div class="fx-shell-start">
+                @foreach (var card in CardList)
+                {
+                    var id = card.Id;
+                    <article class="fx-start-card" data-card="@id">
+                        <div class="fx-start-title">
+                            <span class="fx-start-icon"><ShellIconView Icon="card.Icon" /></span>
+                            <h3>@card.Title</h3>
+                        </div>
+                        <p>@card.Description</p>
+                        <button type="button" class="fx-start-action" @onclick="() => ActivateCardAsync(id)">
+                            @card.ActionLabel <span aria-hidden="true">›</span>
+                        </button>
+                    </article>
+                }
+            </div>
+        </div>
+    }
+
+    @if (PinnedList.Count > 0)
+    {
+        <div class="fx-shell-block">
+            <h2>@PinnedTitle</h2>
+            @if (!string.IsNullOrWhiteSpace(PinnedSubtitle))
+            {
+                <p class="fx-shell-block-note">@PinnedSubtitle</p>
+            }
+            <div class="fx-shell-tiles">
+                @foreach (var tile in PinnedList)
+                {
+                    @Tile(tile)
+                }
+            </div>
+        </div>
+    }
+
+    @if (PopularList.Count > 0)
+    {
+        <div class="fx-shell-block">
+            <h2>@PopularTitle</h2>
+            @if (!string.IsNullOrWhiteSpace(PopularSubtitle))
+            {
+                <p class="fx-shell-block-note">@PopularSubtitle</p>
+            }
+            <div class="fx-shell-tiles">
+                @foreach (var tile in PopularList)
+                {
+                    @Tile(tile)
+                }
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    private RenderFragment Tile(ShellToolTile tile) => __builder =>
+    {
+        var id = tile.Id;
+        var source = tile.SourceLanguageId ?? tile.LanguageId;
+        var target = tile.TargetLanguageId;
+        <button type="button" class="fx-tile" data-tile="@id" @onclick="() => ActivateTileAsync(id)">
+            <span class="fx-tile-art">
+                @if (tile.ShowPin)
+                {
+                    <span class="fx-tile-pin"><ShellIconView Icon="ShellIcon.Pin" Size="14" /></span>
+                }
+                <ShellLanguageMark LanguageId="@source" />
+                @if (!string.IsNullOrEmpty(target))
+                {
+                    <span class="fx-tile-arrow" aria-hidden="true">
+                        <ShellIconView Icon="ShellIcon.Arrow" Size="18" />
+                    </span>
+                    <ShellLanguageMark LanguageId="@target" />
+                }
+            </span>
+            <span class="fx-tile-title">@tile.Title</span>
+        </button>
+    };
+}

@@ -2,13 +2,18 @@
 
 @* A titled group of ribbon buttons. *@
 
-<div class="fx-ribbon-group">
-    <div class="fx-ribbon-group-body">@ChildContent</div>
-    @if (!string.IsNullOrWhiteSpace(Title))
-    {
-        <div class="fx-ribbon-group-title">@Title</div>
-    }
-</div>
+@if (Visible)
+{
+    <CascadingValue Value="Disabled" Name="FxRibbonGroupDisabled">
+        <div class="fx-ribbon-group @(Disabled ? "fx-ribbon-group-disabled" : "")" role="group" aria-label="@(string.IsNullOrWhiteSpace(Title) ? null : Title)">
+            <div class="fx-ribbon-group-body">@ChildContent</div>
+            @if (!string.IsNullOrWhiteSpace(Title))
+            {
+                <div class="fx-ribbon-group-title">@Title</div>
+            }
+        </div>
+    </CascadingValue>
+}
 
 @code {
     /// <summary>Group title (shown at the bottom of the group).</summary>
@@ -16,4 +21,10 @@
 
     /// <summary>Group content — typically RibbonButtons.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>False leaves the group out of the tab.</summary>
+    [Parameter] public bool Visible { get; set; } = true;
+
+    /// <summary>Disables every RibbonButton in the group.</summary>
+    [Parameter] public bool Disabled { get; set; }
 }

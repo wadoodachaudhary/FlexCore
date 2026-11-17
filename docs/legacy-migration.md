@@ -1,6 +1,6 @@
 # Legacy project intake and Web Forms conversion
 
-FlexCore owns the reusable path from an uploaded legacy project archive to a Blazor app and a pair of preview launches. Mutarjim calls these types and does not reimplement them.
+`FlexCore.Migration` owns the reusable path from an uploaded legacy project archive to a Blazor app and a pair of preview launches. The namespace is still `Fx.ControlKit.Migration`. Mutarjim references `FlexCore.Migration/FlexCore.Migration.csproj` and does not reimplement these types.
 
 ## Intake
 
@@ -50,7 +50,7 @@ var panes = new ProgramPreviewPane[]
 };
 ```
 
-Both launches use `ProgramPreviewKind.Web`, so the preview host proxies them through `/_flexcore/program-preview/{sessionId}/app/{**path}` when it started the process, or shows an absolute remote URL directly. The Windows chrome is the frame around that web pane. It is not a WinForms host.
+Both launches use `ProgramPreviewKind.Web`, so the preview host proxies them through `/_flexcore/program-preview/{sessionId}/app/{**path}` when it started the process, or shows an absolute remote URL directly. The Windows chrome is the frame around that web pane. It is not a WinForms host. `ProgramPreviewGroup` and `ProgramPreviewPair` stack those panes vertically unless `Orientation` is `Horizontal`.
 
 ### What actually runs the legacy app
 

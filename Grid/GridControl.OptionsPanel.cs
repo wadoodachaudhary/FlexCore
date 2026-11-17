@@ -415,10 +415,12 @@ public partial class GridControl<TValue>
                 .ToList();
 
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
+            LogGridAction("ColumnsChosen", $"{snapshot.Count(c => c.Visible)}/{snapshot.Count} visible", col.Field);
             await SaveSnapshotSettingsAsync(snapshot);
         }
         else
         {
+            LogGridAction("ColumnsChosen", $"{col.Field}={(visible ? "Shown" : "Hidden")}", col.Field);
             await SaveGridSettingsAsync();
         }
 
@@ -990,6 +992,8 @@ public partial class GridControl<TValue>
         if (IsCurrentFilterPopupField(field))
             _filterPopupApplyRejected = false;
 
+        LogGridAction("Filtered", string.IsNullOrWhiteSpace(text) ? $"{field}=(popup)" : $"{field}={text}", field);
+
         if (EventsRef?.Filtered.HasDelegate == true)
         {
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs
@@ -1033,7 +1037,7 @@ public partial class GridControl<TValue>
         state.NumericFilterMin = null;
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     /// <summary>
@@ -1411,7 +1415,7 @@ public partial class GridControl<TValue>
             state.UseCheckedFilter = true;
         }
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1463,7 +1467,7 @@ public partial class GridControl<TValue>
             state.UseCheckedFilter = false;
         }
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1532,7 +1536,7 @@ public partial class GridControl<TValue>
         else
             _numericFilterMaxText.Remove(field);
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1737,7 +1741,7 @@ public partial class GridControl<TValue>
         state.UseNumericBoundsFilter = false;
         _numericFilterMinText.Remove(field);
         _numericFilterMaxText.Remove(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1907,7 +1911,7 @@ public partial class GridControl<TValue>
         }
 
         _pivotMode = enabled;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     private void EnsurePivotSeeded()
@@ -2002,7 +2006,7 @@ public partial class GridControl<TValue>
 
         _pivotMode = true;
         _activeOptionsPanel = GridOptionsPanel.Pivot;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     private void RemovePivotField(string field, PivotFieldArea area)

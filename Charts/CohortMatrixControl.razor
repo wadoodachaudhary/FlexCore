@@ -1,0 +1,187 @@
+@namespace Fx.ControlKit.Charts
+@inherits Fx.ControlKit.FlexControlBase
+@using System.Globalization
+
+<div class="fx-cohort @CssClass" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    @if (ShowModeToggle && Rows.Count > 0)
+    {
+        <div class="fx-cohort-toolbar">
+            @if (!string.IsNullOrWhiteSpace(Title))
+            {
+                <span class="fx-cohort-title">@Title</span>
+            }
+            else
+            {
+                <span></span>
+            }
+            <div class="fx-cohort-modes">
+                <button type="button"
+                        class="fx-cohort-btn @(!_displayCounts ? "fx-cohort-btn-active" : "")"
+                        @onclick="() => ToggleMode(false)">
+                    % Retention
+                </button>
+                <button type="button"
+                        class="fx-cohort-btn @(_displayCounts ? "fx-cohort-btn-active" : "")"
+                        @onclick="() => ToggleMode(true)">
+                    # Active Users
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (Rows.Count == 0)
+    {
+        <div class="fx-cohort-empty">@EmptyMessage</div>
+    }
+    else
+    {
+        int colCount = MaxPeriodCount;
+        var avgRates = ComputeWeightedAverageRates(colCount);
+
+        <div class="fx-cohort-scroll">
+            <div class="fx-cohort-grid" style="grid-template-columns: minmax(125px, 1.4fr) 74px repeat(@colCount, minmax(58px, 1fr));">
+                <div class="fx-cohort-hdr fx-cohort-hdr-left">@CohortHeader</div>
+                <div class="fx-cohort-hdr">@SizeHeader</div>
+                @for (int c = 0; c < colCount; c++)
+                {
+                    <div class="fx-cohort-hdr">@ResolvePeriodHeader(c)</div>
+                }
+
+                <div class="fx-cohort-avg-lbl">Weighted Avg</div>
+                <div class="fx-cohort-avg-size">@TotalCohortUsers.ToString("N0", CultureInfo.InvariantCulture)</div>
+                @for (int c = 0; c < colCount; c++)
+                {
+                    var avg = avgRates[c];
+                    if (avg.HasValue)
+                    {
+                        <div class="fx-cohort-avg-cell" style="@CellShadeStyle(avg.Value)">
+                            @(avg.Value.ToString("0.0", CultureInfo.InvariantCulture))%
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="fx-cohort-empty-cell">—</div>
+                    }
+                }
+
+                @for (int r = 0; r < Rows.Count; r++)
+                {
+                    var rowIdx = r;
+                    var row = Rows[rowIdx];
+                    <div class="fx-cohort-row-lbl" title="@row.Subtitle">
+                        <span>@row.CohortLabel</span>
+                        @if (!string.IsNullOrWhiteSpace(row.Subtitle))
+                        {
+                            <small>@row.Subtitle</small>
+                        }
+                    </div>
+                    <div class="fx-cohort-row-size">@row.CohortSize.ToString("N0", CultureInfo.InvariantCulture)</div>
+
+                    @for (int c = 0; c < colCount; c++)
+                    {
+                        var colIdx = c;
+                        if (colIdx < row.ActiveCounts.Count)
+                        {
+                            int active = Math.Max(0, row.ActiveCounts[colIdx]);
+                            double pct = row.CohortSize > 0 ? Math.Clamp(active * 100.0 / row.CohortSize, 0, 100) : 0;
+                            <button type="button"
+                                    class="fx-cohort-cell"
+                                    style="@CellShadeStyle(pct)"
+                                    title="@($"{row.CohortLabel} · {ResolvePeriodHeader(colIdx)}: {active:N0} of {row.CohortSize:N0} ({pct:0.1}%)")"
+                                    @onclick="() => HandleCellClickAsync(rowIdx, colIdx, row, active, pct)">
+                                @(_displayCounts ? active.ToString("N0", CultureInfo.InvariantCulture) : $"{pct.ToString("0.#", CultureInfo.InvariantCulture)}%")
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="fx-cohort-empty-cell"></div>
+                        }
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<CohortMatrixRow> Rows { get; set; } = Array.Empty<CohortMatrixRow>();
+    [Parameter] public IReadOnlyList<string>? PeriodHeaders { get; set; }
+    [Parameter] public string CohortHeader { get; set; } = "Cohort";
+    [Parameter] public string SizeHeader { get; set; } = "Users";
+    [Parameter] public bool ShowCounts { get; set; }
+    [Parameter] public bool ShowModeToggle { get; set; } = true;
+    [Parameter] public string BaseRgb { get; set; } = "10, 36, 106";
+    [Parameter] public string EmptyMessage { get; set; } = "Insufficient multi-period user history in the selected window to build cohorts.";
+    [Parameter] public EventCallback<CohortCellClickArgs> OnCellSelected { get; set; }
+
+    private bool _displayCounts;
+    private bool _modeSeeded;
+
+    private int MaxPeriodCount =>
+        Rows.Count == 0 ? 0 : Math.Max(1, Rows.Max(r => r.ActiveCounts.Count));
+
+    private int TotalCohortUsers => Rows.Sum(r => Math.Max(0, r.CohortSize));
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!_modeSeeded)
+        {
+            _displayCounts = ShowCounts;
+            _modeSeeded = true;
+        }
+    }
+
+    private void ToggleMode(bool counts)
+    {
+        _displayCounts = counts;
+        RecordControlAction("DisplayModeChanged", counts ? "Counts" : "Percent");
+    }
+
+    private string ResolvePeriodHeader(int index)
+    {
+        if (PeriodHeaders is not null && index < PeriodHeaders.Count)
+            return PeriodHeaders[index];
+        return index == 0 ? "Period 0" : $"+{index}";
+    }
+
+    private double?[] ComputeWeightedAverageRates(int colCount)
+    {
+        var result = new double?[colCount];
+        for (int c = 0; c < colCount; c++)
+        {
+            long num = 0;
+            long den = 0;
+            foreach (var r in Rows)
+            {
+                if (c < r.ActiveCounts.Count && r.CohortSize > 0)
+                {
+                    num += Math.Max(0, r.ActiveCounts[c]);
+                    den += r.CohortSize;
+                }
+            }
+            result[c] = den > 0 ? Math.Clamp(num * 100.0 / den, 0, 100) : null;
+        }
+        return result;
+    }
+
+    private string CellShadeStyle(double pct)
+    {
+        double alpha = pct <= 0 ? 0.04 : Math.Clamp(0.10 + (pct / 100.0) * 0.80, 0.10, 0.90);
+        string fg = alpha >= 0.52 ? "#ffffff" : "var(--fx-tel-text, #1e293b)";
+        return $"background: rgba({BaseRgb}, {alpha.ToString("0.##", CultureInfo.InvariantCulture)}); color: {fg};";
+    }
+
+    private async Task HandleCellClickAsync(int rIdx, int cIdx, CohortMatrixRow row, int active, double pct)
+    {
+        RecordControlAction("CellSelected", $"{row.CohortLabel}:{ResolvePeriodHeader(cIdx)}", $"{pct:0.1}%");
+        if (OnCellSelected.HasDelegate)
+        {
+            await OnCellSelected.InvokeAsync(new CohortCellClickArgs(rIdx, cIdx, row, active, pct));
+        }
+    }
+}

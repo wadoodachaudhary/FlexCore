@@ -1,0 +1,361 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-ctl-root @ThemeClass">
+        <div class="fx-tel-subbar">
+            <div class="fx-tel-pill-group">
+                <ButtonControl CssClass="@PillCss(_subMode == "Controls")"
+                               Tag="fx-ctl-mode-controls"
+                               OnClick='() => SetSubMode("Controls")'>
+                    Control Actions &amp; Clicks (@FilteredControlRows.Count)
+                </ButtonControl>
+                <ButtonControl CssClass="@PillCss(_subMode == "Grids")"
+                               Tag="fx-ctl-mode-grids"
+                               OnClick='() => SetSubMode("Grids")'>
+                    Grid Operations &amp; Values (@(ActiveSnapshot?.GridOperationRows.Count ?? 0))
+                </ButtonControl>
+                <ButtonControl CssClass="@PillCss(_subMode == "Registry")"
+                               Tag="fx-ctl-mode-registry"
+                               OnClick='() => SetSubMode("Registry")'>
+                    Registered Control Locations (@(ActiveSnapshot?.RegisteredControlRows.Count ?? 0))
+                </ButtonControl>
+                <ButtonControl CssClass="@PillCss(_subMode == "Users")"
+                               Tag="fx-ctl-mode-users"
+                               OnClick='() => SetSubMode("Users")'>
+                    Activity by User (@(ActiveSnapshot?.UserRows.Count ?? 0))
+                </ButtonControl>
+            </div>
+
+            @if (_subMode == "Controls")
+            {
+                <div class="fx-tel-pill-group">
+                    <span class="fx-tel-subbar-label">Control Type:</span>
+                    @foreach (var cat in ControlCategories)
+                    {
+                        var c = cat;
+                        <ButtonControl CssClass="@PillCss(_selectedCategory == c)"
+                                       Tag="@($"fx-ctl-cat-{c}")"
+                                       OnClick="() => _selectedCategory = c">
+                            @c
+                        </ButtonControl>
+                    }
+                </div>
+            }
+            else if (_subMode == "Grids")
+            {
+                <div class="fx-tel-pill-group">
+                    <span class="fx-tel-subbar-label">Grid Verb:</span>
+                    @foreach (var verb in GridVerbChoices)
+                    {
+                        var v = verb;
+                        <ButtonControl CssClass="@PillCss(_selectedGridVerb == v)"
+                                       Tag="@($"fx-ctl-verb-{v}")"
+                                       OnClick="() => _selectedGridVerb = v">
+                            @v
+                        </ButtonControl>
+                    }
+                </div>
+            }
+        </div>
+
+        @if (_subMode == "Controls")
+        {
+            <div class="fx-tel-grid-host">
+                <GridControl TValue="FlexTelemetryControlRow"
+                             Tag="fx-grid-control-actions"
+                             DataSource="@FilteredControlRows"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.Screen)" HeaderText="Screen" Width="175px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.Location)" HeaderText="Hierarchical Control Location" Width="300px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.ControlType)" HeaderText="Control Type" Width="155px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var r = (FlexTelemetryControlRow)context;
+                                }
+                                <BadgeControl Variant="BadgeVariant.Info" Size="BadgeSize.Small" Text="@r.ControlType" />
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.Control)" HeaderText="Control ID / Caption" Width="205px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.Tag)" HeaderText="Tag" Width="125px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.Action)" HeaderText="Action" Width="115px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.LastValue)" HeaderText="Latest Value" Width="155px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.ActionCount)" HeaderText="Count" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.UniqueUsers)" HeaderText="Users" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryControlRow.LastActionLocal)" HeaderText="Last Action" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        }
+        else if (_subMode == "Grids")
+        {
+            @if (_gridVerbDonutSeries.Count > 0 && _gridVerbDonutSeries[0].DataPoints.Count > 0)
+            {
+                <div class="fx-tel-charts-row fx-tel-charts-two fx-ctl-compact-charts">
+                    <CardControl Title="GridControl &amp; TreeGridControl Action Distribution" CssClass="fx-tel-card" Elevation="1">
+                        <ChartControl Type="ChartType.Donut" Series="@_gridVerbDonutSeries" Height="170px" />
+                    </CardControl>
+                    <CardControl Title="Grid Operations by Verb" CssClass="fx-tel-card" Elevation="1">
+                        <ChartControl Bars="@_gridVerbBars"
+                                      ShowValues="true"
+                                      ValueFormat="N0"
+                                      BarColor="@(Theme == TelemetryTheme.VBClassic ? "#0a246a" : "#8b5cf6")"
+                                      LabelStyle="min-width:165px;" />
+                    </CardControl>
+                </div>
+            }
+
+            <div class="fx-tel-grid-host">
+                <GridControl TValue="FlexTelemetryGridOpRow"
+                             Tag="fx-grid-operations"
+                             DataSource="@FilteredGridOperationRows"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.TimestampLocal)" HeaderText="Timestamp" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.UserId)" HeaderText="User" Width="105px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Screen)" HeaderText="Screen" Width="175px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Location)" HeaderText="Parent Hierarchy Location" Width="280px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.ControlId)" HeaderText="Grid ID" Width="150px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Tag)" HeaderText="Tag" Width="115px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Action)" HeaderText="Grid Action" Width="135px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var r = (FlexTelemetryGridOpRow)context;
+                                }
+                                <BadgeControl Variant="BadgeVariant.Primary" Size="BadgeSize.Small" Text="@r.Action" />
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Value)" HeaderText="Logged Value" Width="210px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryGridOpRow.Detail)" HeaderText="Detail" Width="230px" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        }
+        else if (_subMode == "Registry")
+        {
+            <div class="fx-tel-grid-host">
+                <GridControl TValue="FlexTelemetryRegisteredControlRow"
+                             Tag="fx-grid-control-registry"
+                             DataSource="@(ActiveSnapshot?.RegisteredControlRows ?? Array.Empty<FlexTelemetryRegisteredControlRow>())"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.Screen)" HeaderText="Screen" Width="180px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.Location)" HeaderText="Registered Parent Hierarchy Path" Width="340px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.ControlType)" HeaderText="FlexKit Control" Width="165px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.ControlId)" HeaderText="Control ID" Width="190px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.Tag)" HeaderText="Tag Field" Width="130px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.ActionCount)" HeaderText="Actions" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.LastAction)" HeaderText="Log.LastAction" Width="130px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.LastValue)" HeaderText="Log.LastValue" Width="170px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryRegisteredControlRow.LastSeenLocal)" HeaderText="Last Updated" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        }
+        else
+        {
+            <div class="fx-tel-grid-host">
+                <GridControl TValue="FlexTelemetryUserRow"
+                             Tag="fx-grid-users"
+                             DataSource="@(ActiveSnapshot?.UserRows ?? Array.Empty<FlexTelemetryUserRow>())"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.UserId)" HeaderText="User ID" Width="140px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.TotalActions)" HeaderText="Total Events" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.ScreenOpens)" HeaderText="Screen Opens" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.ButtonClicks)" HeaderText="Button Clicks" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.GridOperations)" HeaderText="Grid Ops" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.ControlChanges)" HeaderText="Inputs" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.TaskAndReportRuns)" HeaderText="Tasks &amp; Reports" Width="120px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.LoginCount)" HeaderText="Logins" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.ActiveMinutes)" HeaderText="Foreground Min" Width="115px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.TopScreen)" HeaderText="Most Used Screen" Width="210px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryUserRow.LastSeenLocal)" HeaderText="Last Activity" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    private static readonly string[] ControlCategories =
+    {
+        "All", "ButtonControl", "ToolbarButtonControl", "DropDownListControl", "TextBoxControl",
+        "NumericTextBoxControl", "DatePickerControl", "CheckBoxControl", "SwitchControl",
+        "TabStripControl", "Menu", "ReportWriterControl"
+    };
+
+    private static readonly string[] GrafanaPalette =
+    {
+        "#38bdf8", "#10b981", "#a855f7", "#f59e0b", "#f43f5e", "#3b82f6", "#14b8a6", "#eab308"
+    };
+
+    private static readonly string[] VbPalette =
+    {
+        "#0a246a", "#3a6ea5", "#2e7d32", "#8b5a00", "#8b0000", "#4b0082", "#00695c", "#5d4037"
+    };
+
+    [Parameter] public string Title { get; set; } = "ControlActivity";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexTelemetrySnapshot? Snapshot { get; set; }
+
+    private FlexTelemetrySnapshot? _standaloneSnapshot;
+    private string _subMode = "Controls";
+    private string _selectedCategory = "All";
+    private string _selectedGridVerb = "All";
+    private readonly List<ChartSeries> _gridVerbDonutSeries = new();
+    private readonly List<ChartControl.ChartBar> _gridVerbBars = new();
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("ControlActivityControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    private FlexTelemetrySnapshot? ActiveSnapshot => Snapshot ?? _standaloneSnapshot;
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private IReadOnlyList<string> GridVerbChoices
+    {
+        get
+        {
+            var list = new List<string> { "All" };
+            if (ActiveSnapshot is not null)
+            {
+                foreach (var g in ActiveSnapshot.GridActionSummaryRows)
+                    list.Add(g.Action);
+            }
+            return list;
+        }
+    }
+
+    public IReadOnlyList<FlexTelemetryControlRow> FilteredControlRows =>
+        (ActiveSnapshot?.ControlRows ?? Array.Empty<FlexTelemetryControlRow>())
+            .Where(r => _selectedCategory == "All" || r.ControlType.StartsWith(_selectedCategory, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    public IReadOnlyList<FlexTelemetryGridOpRow> FilteredGridOperationRows =>
+        (ActiveSnapshot?.GridOperationRows ?? Array.Empty<FlexTelemetryGridOpRow>())
+            .Where(r => _selectedGridVerb == "All" || string.Equals(r.Action, _selectedGridVerb, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+        if (Snapshot is null && Services.GetService(typeof(ITelemetryDataSource)) is ITelemetryDataSource ds)
+        {
+            _standaloneSnapshot = ds.BuildSnapshot(new FlexTelemetryQueryFilter());
+        }
+        RebuildGridCharts();
+    }
+
+    protected override void OnParametersSet()
+    {
+        RebuildGridCharts();
+    }
+
+    private void SetSubMode(string mode)
+    {
+        _subMode = mode;
+        RecordControlAction("SubModeChanged", mode);
+    }
+
+    private void RebuildGridCharts()
+    {
+        _gridVerbDonutSeries.Clear();
+        _gridVerbBars.Clear();
+        if (ActiveSnapshot is null)
+            return;
+
+        var palette = Theme == TelemetryTheme.VBClassic ? VbPalette : GrafanaPalette;
+        var donut = new ChartSeries("Grid Verbs", ChartType.Donut);
+        int idx = 0;
+        foreach (var g in ActiveSnapshot.GridActionSummaryRows.Take(8))
+        {
+            var clr = palette[idx++ % palette.Length];
+            donut.DataPoints.Add(new ChartDataPoint(g.Action, g.EventCount, clr));
+            _gridVerbBars.Add(new ChartControl.ChartBar($"{g.Action} ({g.UniqueGrids} grids)", g.EventCount, clr));
+        }
+        if (donut.DataPoints.Count > 0)
+            _gridVerbDonutSeries.Add(donut);
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        if (_subMode == "Grids")
+        {
+            sb.AppendLine("Timestamp,User,Screen,Location,GridId,Tag,Action,Value,Detail");
+            foreach (var r in FilteredGridOperationRows)
+                sb.AppendLine($"{Csv(r.TimestampLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))},{Csv(r.UserId)},{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.ControlId)},{Csv(r.Tag)},{Csv(r.Action)},{Csv(r.Value)},{Csv(r.Detail)}");
+            return ("grid-operations", sb.ToString());
+        }
+        if (_subMode == "Registry")
+        {
+            sb.AppendLine("Screen,Location,ControlType,ControlId,Tag,ActionCount,LastAction,LastValue,LastUpdated");
+            foreach (var r in ActiveSnapshot?.RegisteredControlRows ?? Array.Empty<FlexTelemetryRegisteredControlRow>())
+                sb.AppendLine($"{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.ControlType)},{Csv(r.ControlId)},{Csv(r.Tag)},{r.ActionCount},{Csv(r.LastAction)},{Csv(r.LastValue)},{Csv(r.LastSeenLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))}");
+            return ("registered-controls", sb.ToString());
+        }
+        if (_subMode == "Users")
+        {
+            sb.AppendLine("UserId,TotalEvents,ScreenOpens,ButtonClicks,GridOps,InputCommits,TasksAndReports,Logins,ForegroundMinutes,MostUsedScreen,LastActivity");
+            foreach (var r in ActiveSnapshot?.UserRows ?? Array.Empty<FlexTelemetryUserRow>())
+                sb.AppendLine($"{Csv(r.UserId)},{r.TotalActions},{r.ScreenOpens},{r.ButtonClicks},{r.GridOperations},{r.ControlChanges},{r.TaskAndReportRuns},{r.LoginCount},{r.ActiveMinutes.ToString("0.0", CultureInfo.InvariantCulture)},{Csv(r.TopScreen)},{Csv(r.LastSeenLocal.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))}");
+            return ("user-activity", sb.ToString());
+        }
+
+        sb.AppendLine("Screen,Location,ControlType,Control,Tag,Action,LatestValue,Count,Users,LastAction");
+        foreach (var r in FilteredControlRows)
+            sb.AppendLine($"{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.ControlType)},{Csv(r.Control)},{Csv(r.Tag)},{Csv(r.Action)},{Csv(r.LastValue)},{r.ActionCount},{r.UniqueUsers},{Csv(r.LastActionLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))}");
+        return ("control-actions", sb.ToString());
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+}

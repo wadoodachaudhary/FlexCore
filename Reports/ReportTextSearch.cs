@@ -6,44 +6,70 @@ namespace Fx.ControlKit.Reports;
 
 public sealed record ReportSearchMatch(int Page, int Start, int Length, string Preview);
 
-/// <summary>Searches finalized report output without executing formulas, scripts, or remote requests.</summary>
+/// <summary>Searches finalized report output one page at a time, without executing formulas, scripts, or remote requests.
+/// A page is searched when the viewer reaches it, so a long report is searched as far as the first match and no rendered
+/// page is kept: the searched pages keep only their match positions.</summary>
 public sealed class ReportTextSearch
 {
-    private readonly IReadOnlyList<string> _pages;
+    private readonly SortedDictionary<int, ReportSearchMatch[]> _pages = new();
     public string Query { get; }
-    public IReadOnlyList<ReportSearchMatch> Matches { get; }
-    public bool Truncated { get; }
+    /// <summary>Every match on the pages searched so far, in page order.</summary>
+    public IReadOnlyList<ReportSearchMatch> Matches => _pages.Values.SelectMany(matches => matches).ToArray();
+    public int MatchCount { get; private set; }
+    /// <summary>A page stopped at its 10,000th match.</summary>
+    public bool Truncated { get; private set; }
+    /// <summary>How many pages the search has covered.</summary>
+    public int PageCount => _pages.Count;
+    public IEnumerable<int> SearchedPages => _pages.Keys;
     private sealed record TextPart(IText Node, int Start, int Length);
 
-    public ReportTextSearch(IReadOnlyList<string> pages, string query)
+    public ReportTextSearch(string query)
     {
-        if (pages.Sum(page => (long)page.Length) > 50_000_000) throw new InvalidDataException("Report search is limited to 50 MB of rendered content.");
-        _pages = pages.ToArray(); Query = query.Trim();
-        var matches = new List<ReportSearchMatch>(); Matches = matches;
-        if (Query.Length == 0) return;
+        Query = query.Trim();
         if (Query.Length > 1000) throw new InvalidDataException("Search text exceeds 1,000 characters.");
-        for (var page = 0; page < pages.Count; page++)
+    }
+
+    public bool IsSearched(int page) => _pages.ContainsKey(page);
+
+    public IReadOnlyList<ReportSearchMatch> MatchesOn(int page) => _pages.TryGetValue(page, out var matches) ? matches : [];
+
+    /// <summary>Matches on the searched pages before <paramref name="page"/>: the ordinal of a match once every page is searched.</summary>
+    public int MatchesBefore(int page) => _pages.TakeWhile(pair => pair.Key < page).Sum(pair => pair.Value.Length);
+
+    /// <summary>Searches one rendered page; searching it again replaces its result.</summary>
+    public IReadOnlyList<ReportSearchMatch> SearchPage(int page, string html)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+        var matches = new List<ReportSearchMatch>();
+        if (Query.Length > 0)
         {
-            using var document = new HtmlParser().ParseDocument(pages[page]);
+            using var document = new HtmlParser().ParseDocument(html);
             var text = ReadText(document.Body!, out _);
             for (var offset = 0; offset <= text.Length - Query.Length;)
             {
                 var found = text.IndexOf(Query, offset, StringComparison.OrdinalIgnoreCase);
                 if (found < 0) break;
                 var start = Math.Max(0, found - 30);
-                matches.Add(new(page + 1, found, Query.Length, text[start..Math.Min(text.Length, found + Query.Length + 40)].Trim()));
-                if (matches.Count == 10000) { Truncated = true; return; }
+                matches.Add(new(page, found, Query.Length, text[start..Math.Min(text.Length, found + Query.Length + 40)].Trim()));
+                if (matches.Count == 10000) { Truncated = true; break; }
                 offset = found + Query.Length;
             }
         }
+        if (_pages.TryGetValue(page, out var previous)) MatchCount -= previous.Length;
+        var result = matches.ToArray();
+        _pages[page] = result;
+        MatchCount += result.Length;
+        return result;
     }
 
-    public string HighlightPage(int page, int activeMatch)
+    /// <summary>Marks the page's matches in its rendered HTML; the active match (an index into <see cref="MatchesOn"/>) gets the
+    /// stronger mark. Each mark carries the anchor <c>fx-report-hit-{index}</c>.</summary>
+    public string HighlightPage(int page, string html, int activeMatch)
     {
-        if (page < 1 || page > _pages.Count) throw new ArgumentOutOfRangeException(nameof(page));
-        using var document = new HtmlParser().ParseDocument(_pages[page - 1]);
+        var matches = MatchesOn(page).Select((match, index) => (match, index)).ToList();
+        if (matches.Count == 0) return html;
+        using var document = new HtmlParser().ParseDocument(html);
         ReadText(document.Body!, out var parts);
-        var matches = Matches.Select((match, index) => (match, index)).Where(pair => pair.match.Page == page).ToList();
         var anchored = new HashSet<int>();
         foreach (var part in parts)
         {

@@ -1,0 +1,1387 @@
+@* TelemetryControl — Generalized FlexKit Telemetry, Control Hierarchy, SQL & Log Studio.
+   Application-agnostic (like ReportWriterControl): every host integration point is an optional
+   interface (ITelemetryDataSource, ITelemetryCatalogProvider, ITelemetryTenantProvider,
+   IFlexSqlTelemetryProvider, ITelemetryExportHandler) with built-in defaults over FlexKit's
+   server-side FlexControlLogStore.
+   Default Look & Feel: VB Classic (TelemetryTheme.VBClassic), with Grafana Dark
+   (TelemetryTheme.GrafanaDark) and Modern Light (TelemetryTheme.ModernLight) selectable as options. *@
+
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@implements IAsyncDisposable
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+@using Microsoft.JSInterop
+
+@inject IServiceProvider Services
+@inject IJSRuntime JSRuntime
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-tel-shell @ThemeClass">
+        @if (ShowChrome)
+        {
+            <ToolbarControl CssClass="fx-tel-toolbar" ShowCaptions="true" ShowCaptionsToggle="false" Tag="fx-tel-main-toolbar">
+                <ChildContent>
+                    <ToolbarButtonControl Label="Refresh Telemetry"
+                                          Title="Flush pending server-side FlexKit control logs and recalculate telemetry views"
+                                          Tag="fx-tel-refresh"
+                                          OnClick="RefreshAsync"
+                                          Disabled="@Busy" />
+
+                    @if (ToolbarActions is not null)
+                    {
+                        @ToolbarActions
+                    }
+
+                    <ToolbarButtonControl Label="Export CSV"
+                                          Title="Export the active telemetry view to CSV"
+                                          Tag="fx-tel-export-csv"
+                                          OnClick="ExportCurrentViewCsvAsync" />
+                    <ToolbarButtonControl Label="Export CloudWatch NDJSON"
+                                          Title="Export structured AWS CloudWatch Logs Insights / Grafana Loki NDJSON rows"
+                                          Tag="fx-tel-export-cloudwatch"
+                                          OnClick="() => ExportStructuredLogsAsync(clefFormat: false)" />
+                    <ToolbarButtonControl Label="Export Serilog CLEF"
+                                          Title="Export structured Serilog Compact Log Event Format (.clef) rows"
+                                          Tag="fx-tel-export-clef"
+                                          OnClick="() => ExportStructuredLogsAsync(clefFormat: true)" />
+                </ChildContent>
+                <TrailingContent>
+                    <div class="fx-tel-toolbar-trailing">
+                        <div class="fx-tel-style-picker">
+                            <span class="fx-tel-filter-label">Look &amp; Feel</span>
+                            <DropDownListControl TValue="TelemetryTheme" TItem="ThemeOption"
+                                                 Tag="fx-tel-theme-selector"
+                                                 DataSource="@ThemeOptions"
+                                                 Value="@ActiveTheme"
+                                                 ValueChanged="OnThemeSelectedAsync"
+                                                 ValueFieldName="@nameof(ThemeOption.Value)"
+                                                 TextFieldName="@nameof(ThemeOption.Text)"
+                                                 Width="138px"
+                                                 SuppressUnchangedValueChange="true" />
+                        </div>
+                        <span class="fx-tel-stamp">
+                            @if (_autoRefreshSeconds > 0)
+                            {
+                                <span class="fx-tel-live-dot" title="Live auto-refresh active"></span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(EffectiveTenantLabel))
+                            {
+                                <span>@TenantCaption: <strong>@EffectiveTenantLabel</strong></span>
+                            }
+                            @if (_snapshot is not null)
+                            {
+                                <span> · <strong>@_snapshot.TimeWindowLabel</strong> · @_snapshot.GeneratedAtLocal.ToString("HH:mm:ss")</span>
+                            }
+                        </span>
+                    </div>
+                </TrailingContent>
+            </ToolbarControl>
+
+            <div class="fx-tel-filter-bar">
+                @if (EnableProductAnalytics)
+                {
+                    <div class="fx-tel-filter-item">
+                        <div class="fx-tel-mode-switch" role="group" aria-label="Telemetry Workspace Mode">
+                            <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.Observability)"
+                                           Tag="fx-tel-mode-observability"
+                                           OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.Observability)">
+                                Observability
+                            </ButtonControl>
+                            <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)"
+                                           Tag="fx-tel-mode-product"
+                                           OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.ProductAnalytics)">
+                                Product Analytics
+                            </ButtonControl>
+                        </div>
+                    </div>
+                }
+
+                @if (_canCrossTenant && _tenantOptions.Count > 1)
+                {
+                    <div class="fx-tel-filter-item">
+                        <label class="fx-tel-filter-label">@TenantCaption</label>
+                        <DropDownListControl TValue="string" TItem="FilterOption"
+                                             Tag="fx-tel-tenant-picker"
+                                             DataSource="@_tenantOptions"
+                                             Value="@_selectedTenant"
+                                             ValueChanged="OnTenantSelectionChangedAsync"
+                                             ValueFieldName="@nameof(FilterOption.Value)"
+                                             TextFieldName="@nameof(FilterOption.Text)"
+                                             Width="190px"
+                                             PanelMaxHeight="300"
+                                             SuppressUnchangedValueChange="true" />
+                    </div>
+                }
+
+                <div class="fx-tel-filter-item">
+                    <label class="fx-tel-filter-label">Time Range</label>
+                    <div class="fx-tel-pill-group">
+                        @foreach (var preset in TimePresets)
+                        {
+                            var p = preset;
+                            <ButtonControl CssClass="@PillCss(_selectedTimePresetKey == p.Key)"
+                                           Tag="@($"fx-tel-range-{p.Key}")"
+                                           OnClick="() => SelectTimePreset(p)">
+                                @p.Label
+                            </ButtonControl>
+                        }
+                    </div>
+                </div>
+
+                <div class="fx-tel-filter-item">
+                    <label class="fx-tel-filter-label">Auto-Refresh</label>
+                    <DropDownListControl TValue="int" TItem="RefreshOption"
+                                         Tag="fx-tel-autorefresh"
+                                         DataSource="@RefreshOptions"
+                                         Value="@_autoRefreshSeconds"
+                                         ValueChanged="OnAutoRefreshChanged"
+                                         ValueFieldName="@nameof(RefreshOption.Seconds)"
+                                         TextFieldName="@nameof(RefreshOption.Label)"
+                                         Width="95px"
+                                         SuppressUnchangedValueChange="true" />
+                </div>
+
+                @if (_moduleOptions.Count > 1)
+                {
+                    <div class="fx-tel-filter-item">
+                        <label class="fx-tel-filter-label">Module</label>
+                        <DropDownListControl TValue="string" TItem="FilterOption"
+                                             Tag="fx-tel-module-filter"
+                                             DataSource="@_moduleOptions"
+                                             Value="@_selectedModule"
+                                             ValueChanged="OnModuleChanged"
+                                             ValueFieldName="@nameof(FilterOption.Value)"
+                                             TextFieldName="@nameof(FilterOption.Text)"
+                                             Width="170px"
+                                             PanelMaxHeight="280"
+                                             SuppressUnchangedValueChange="true" />
+                    </div>
+                }
+
+                <div class="fx-tel-filter-item">
+                    <label class="fx-tel-filter-label">User</label>
+                    <DropDownListControl TValue="string" TItem="FilterOption"
+                                         Tag="fx-tel-user-filter"
+                                         DataSource="@_userOptions"
+                                         Value="@_selectedUser"
+                                         ValueChanged="OnUserChanged"
+                                         ValueFieldName="@nameof(FilterOption.Value)"
+                                         TextFieldName="@nameof(FilterOption.Text)"
+                                         Width="135px"
+                                         PanelMaxHeight="280"
+                                         SuppressUnchangedValueChange="true" />
+                </div>
+
+                <div class="fx-tel-filter-item fx-tel-filter-search">
+                    <label class="fx-tel-filter-label">Query</label>
+                    <TextBoxControl Value="@_searchText"
+                                    Tag="fx-tel-query-box"
+                                    ValueChanged="OnSearchChangedAsync"
+                                    UpdateOnInput="true"
+                                    ClearableText="true"
+                                    Placeholder="Filter screen, location, tag, control, value..."
+                                    Width="240px" />
+                </div>
+            </div>
+        }
+
+        <TabStripControl Items="@TabItems"
+                         Tag="fx-tel-tabs"
+                         SelectedIndex="@_selectedTab"
+                         SelectedIndexChanged="OnTabChangedAsync"
+                         Orientation="TabOrientation.Horizontal"
+                         ShowOrientationMenu="false"
+                         CssClass="fx-tel-tabstrip" />
+
+        <div class="fx-tel-body">
+            @if (ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)
+            {
+                @if (_selectedTab == 0)
+                {
+                    <FeatureAdoptionControl @ref="_featureAdoption"
+                                            Theme="@ActiveTheme"
+                                            ProductSnapshot="@_productSnapshot" />
+                }
+                else if (_selectedTab == 1)
+                {
+                    <FunnelAnalyticsControl @ref="_funnelAnalytics"
+                                            Theme="@ActiveTheme"
+                                            ProductSnapshot="@_productSnapshot" />
+                }
+                else if (_selectedTab == 2)
+                {
+                    <UserJourneyControl @ref="_userJourneys"
+                                        Theme="@ActiveTheme"
+                                        ProductSnapshot="@_productSnapshot" />
+                }
+                else if (_selectedTab == 3)
+                {
+                    <RetentionCohortControl @ref="_retentionCohorts"
+                                            Theme="@ActiveTheme"
+                                            ProductSnapshot="@_productSnapshot" />
+                }
+                else if (_selectedTab == 4)
+                {
+                    <FrictionInsightsControl @ref="_frictionInsights"
+                                             Theme="@ActiveTheme"
+                                             ProductSnapshot="@_productSnapshot" />
+                }
+                else if (_selectedTab == 5)
+                {
+                    <TelemetryPivotControl @ref="_telemetryPivot"
+                                           Theme="@ActiveTheme"
+                                           ProductSnapshot="@_productSnapshot" />
+                }
+            }
+            else if (_selectedTab == 0 && _snapshot is not null)
+            {
+                <div class="fx-tel-scroll-pane">
+                    <div class="fx-tel-kpi-grid">
+                        <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-cyan" Elevation="1">
+                            <div class="fx-tel-kpi-label">Total Telemetry Events</div>
+                            <div class="fx-tel-kpi-value fx-tel-val-cyan">@_snapshot.TotalEvents.ToString("N0")</div>
+                            <div class="fx-tel-kpi-sub">@_snapshot.TotalScreenOpens.ToString("N0") screen opens · @_snapshot.TotalTaskAndReportRuns.ToString("N0") tasks/reports</div>
+                        </CardControl>
+
+                        <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-emerald" Elevation="1">
+                            <div class="fx-tel-kpi-label">Control &amp; Button Actions</div>
+                            <div class="fx-tel-kpi-value fx-tel-val-emerald">@((_snapshot.TotalButtonClicks + _snapshot.TotalControlChanges).ToString("N0"))</div>
+                            <div class="fx-tel-kpi-sub">@_snapshot.TotalButtonClicks.ToString("N0") clicks · @_snapshot.TotalControlChanges.ToString("N0") input/picker commits</div>
+                        </CardControl>
+
+                        <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-violet" Elevation="1">
+                            <div class="fx-tel-kpi-label">GridControl Operations</div>
+                            <div class="fx-tel-kpi-value fx-tel-val-violet">@_snapshot.TotalGridOperations.ToString("N0")</div>
+                            <div class="fx-tel-kpi-sub">@_snapshot.GridActionSummaryRows.Count distinct grid verbs · zero extra server trips</div>
+                        </CardControl>
+
+                        <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-blue" Elevation="1">
+                            <div class="fx-tel-kpi-label">Registered FlexKit Controls</div>
+                            <div class="fx-tel-kpi-value">@_snapshot.RegisteredControlCount.ToString("N0")</div>
+                            <div class="fx-tel-kpi-sub">@_snapshot.ControlTypeRows.Count control types with parent locations</div>
+                        </CardControl>
+
+                        <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-amber" Elevation="1">
+                            <div class="fx-tel-kpi-label">Active Users</div>
+                            <div class="fx-tel-kpi-value">@_snapshot.UniqueUsers.ToString("N0")</div>
+                            <div class="fx-tel-kpi-sub">@(string.IsNullOrWhiteSpace(UsersKpiSubText) ? _snapshot.TimeWindowLabel : UsersKpiSubText)</div>
+                        </CardControl>
+
+                        @if (CustomKpiCard is not null)
+                        {
+                            <CardControl CssClass="@($"fx-tel-card fx-tel-kpi-card fx-tel-accent-{CustomKpiCard.AccentKind}")" Elevation="1">
+                                <div class="fx-tel-kpi-label">@CustomKpiCard.Label</div>
+                                <div class="fx-tel-kpi-value @(CustomKpiCard.IsWarning ? "fx-tel-val-warn" : "")">@CustomKpiCard.ValueText</div>
+                                <div class="fx-tel-kpi-sub">
+                                    @if (CustomKpiCard.ActionContent is not null)
+                                    {
+                                        @CustomKpiCard.ActionContent
+                                    }
+                                    else
+                                    {
+                                        @CustomKpiCard.SubText
+                                    }
+                                </div>
+                            </CardControl>
+                        }
+                        else
+                        {
+                            <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-rose" Elevation="1">
+                                <div class="fx-tel-kpi-label">Zero-Activity Screens</div>
+                                <div class="fx-tel-kpi-value @(_snapshot.UnusedCatalogScreenCount > 0 ? "fx-tel-val-warn" : "")">@_snapshot.UnusedCatalogScreenCount.ToString("N0")</div>
+                                <div class="fx-tel-kpi-sub">of @_snapshot.CatalogScreenCount.ToString("N0") known screens in @_snapshot.TimeWindowLabel</div>
+                            </CardControl>
+                        }
+                    </div>
+
+                    <div class="fx-tel-hero-row">
+                        <CardControl Title="@($"Control Telemetry Volume ({_snapshot.TimeWindowLabel})")" CssClass="fx-tel-card fx-tel-hero-main" Elevation="1">
+                            <div class="fx-tel-panel-toolbar">
+                                <span class="fx-tel-panel-hint">Server-side FlexKit control actions buffered in memory &amp; flushed without extra network trips</span>
+                                <div class="fx-tel-pill-group">
+                                    <ButtonControl CssClass="@PillCss(_volumeChartStyle == "Bars")" Tag="fx-tel-vol-bars" OnClick='() => SetVolumeChartStyle("Bars")'>Histogram Bars</ButtonControl>
+                                    <ButtonControl CssClass="@PillCss(_volumeChartStyle == "Area")" Tag="fx-tel-vol-area" OnClick='() => SetVolumeChartStyle("Area")'>Stacked Area</ButtonControl>
+                                </div>
+                            </div>
+                            @if (_timeSeriesHistogramSeries.Count > 0 && _snapshot.TotalEvents > 0)
+                            {
+                                <ChartControl Type="@(_volumeChartStyle == "Area" ? ChartType.StackedArea : ChartType.StackedBar)"
+                                              Series="@_timeSeriesHistogramSeries"
+                                              Height="220px" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">No events recorded in @_snapshot.TimeWindowLabel. Interact with buttons, dropdowns, inputs, or grids — actions flush in-memory on the server automatically.</div>
+                            }
+                        </CardControl>
+
+                        <CardControl Title="UI Screen Coverage (%)" CssClass="fx-tel-card fx-tel-gauge-card" Elevation="1">
+                            <ArcGaugeControl Value="@UiScreenCoveragePercent"
+                                             Min="0"
+                                             Max="100"
+                                             Ranges="@GaugeRanges"
+                                             ValueFormat="0.0"
+                                             Height="180px"
+                                             AriaLabel="UI Screen Coverage Percentage" />
+                            <div class="fx-tel-gauge-caption">
+                                <strong>@_snapshot.UniqueScreensVisited</strong> of <strong>@_snapshot.CatalogScreenCount</strong> screens active ·
+                                <BadgeControl Variant="BadgeVariant.Warning" Size="BadgeSize.Small" Text="@($"{_snapshot.UnusedCatalogScreenCount} zero-open")" />
+                            </div>
+                        </CardControl>
+
+                        @if (SecondaryGauge is not null)
+                        {
+                            <CardControl Title="@SecondaryGauge.Title" CssClass="fx-tel-card fx-tel-gauge-card" Elevation="1">
+                                @if (SecondaryGauge.ValuePercent.HasValue)
+                                {
+                                    <ArcGaugeControl Value="@SecondaryGauge.ValuePercent.Value"
+                                                     Min="0"
+                                                     Max="100"
+                                                     Ranges="@GaugeRanges"
+                                                     ValueFormat="0.0"
+                                                     Height="180px"
+                                                     AriaLabel="@SecondaryGauge.Title" />
+                                    <div class="fx-tel-gauge-caption">@SecondaryGauge.CaptionText</div>
+                                }
+                                else
+                                {
+                                    <div class="fx-tel-empty">@SecondaryGauge.EmptyMessage</div>
+                                }
+                            </CardControl>
+                        }
+                        else
+                        {
+                            <CardControl Title="Active Registered Controls (%)" CssClass="fx-tel-card fx-tel-gauge-card" Elevation="1">
+                                <ArcGaugeControl Value="@ActiveRegisteredControlsPercent"
+                                                 Min="0"
+                                                 Max="100"
+                                                 Ranges="@GaugeRanges"
+                                                 ValueFormat="0.0"
+                                                 Height="180px"
+                                                 AriaLabel="Active Registered Controls Percentage" />
+                                <div class="fx-tel-gauge-caption">
+                                    <strong>@ActiveControlCount</strong> of <strong>@_snapshot.RegisteredControlCount</strong> registered controls exercised
+                                </div>
+                            </CardControl>
+                        }
+                    </div>
+
+                    <div class="fx-tel-charts-row fx-tel-charts-three">
+                        <CardControl Title="FlexKit Control Type Mix" CssClass="fx-tel-card" Elevation="1">
+                            @if (_controlTypeDonutSeries.Count > 0 && _controlTypeDonutSeries[0].DataPoints.Count > 0)
+                            {
+                                <ChartControl Type="ChartType.Donut"
+                                              Series="@_controlTypeDonutSeries"
+                                              Height="235px" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">Control type breakdown populates as FlexKit controls emit telemetry.</div>
+                            }
+                        </CardControl>
+
+                        <CardControl Title="Screen × Time-of-Day Activity Heatmap" CssClass="fx-tel-card" Elevation="1">
+                            @if (_screenHourHeatmapSeries.Count > 0)
+                            {
+                                <ChartControl Type="ChartType.Heatmap"
+                                              Series="@_screenHourHeatmapSeries"
+                                              ColorPalette="@(new[] { ActiveTheme == TelemetryTheme.VBClassic ? "#0a246a" : "#06b6d4" })"
+                                              Height="235px" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">Heatmap populates once screens record activity across time-of-day blocks.</div>
+                            }
+                        </CardControl>
+
+                        <CardControl Title="Screen Usage Concentration (Pareto)" CssClass="fx-tel-card" Elevation="1">
+                            @if (_screenParetoSeries.Count > 0 && _screenParetoSeries[0].DataPoints.Count > 0)
+                            {
+                                <ChartControl Type="ChartType.Pareto"
+                                              Series="@_screenParetoSeries"
+                                              ColorPalette="@(ActiveTheme == TelemetryTheme.VBClassic ? new[] { "#0a246a", "#8b0000" } : new[] { "#3b82f6", "#f59e0b" })"
+                                              Height="235px" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">No screen opens recorded in @_snapshot.TimeWindowLabel.</div>
+                            }
+                        </CardControl>
+                    </div>
+
+                    <div class="fx-tel-charts-row fx-tel-charts-two">
+                        <CardControl Title="Most Active FlexKit Controls (Screen &gt; Control)" CssClass="fx-tel-card" Elevation="1">
+                            @if (_topControlsBars.Count > 0)
+                            {
+                                <ChartControl Bars="@_topControlsBars"
+                                              ShowValues="true"
+                                              ValueFormat="N0"
+                                              BarColor="@(ActiveTheme == TelemetryTheme.VBClassic ? "#2e7d32" : "#10b981")"
+                                              LabelStyle="min-width:210px;" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">Button, toolbar, dropdown, and input actions appear here automatically.</div>
+                            }
+                        </CardControl>
+
+                        <CardControl Title="Top Visited Screens" CssClass="fx-tel-card" Elevation="1">
+                            @if (_topScreensBars.Count > 0)
+                            {
+                                <ChartControl Bars="@_topScreensBars"
+                                              ShowValues="true"
+                                              ValueFormat="N0"
+                                              BarColor="@(ActiveTheme == TelemetryTheme.VBClassic ? "#0a246a" : "#38bdf8")"
+                                              LabelStyle="min-width:190px;" />
+                            }
+                            else
+                            {
+                                <div class="fx-tel-empty">No screen opens recorded in @_snapshot.TimeWindowLabel.</div>
+                            }
+                        </CardControl>
+                    </div>
+
+                    <div class="fx-tel-insights-row">
+                        <CardControl Title="Rarely or Never Used Functions &amp; Telemetry Findings" CssClass="fx-tel-card fx-tel-insights-card" Elevation="1">
+                            @if (AdditionalFindings is { Count: > 0 })
+                            {
+                                <ul class="fx-tel-findings-list">
+                                    @foreach (var finding in AdditionalFindings)
+                                    {
+                                        <li>@finding</li>
+                                    }
+                                </ul>
+                            }
+                            else if (OverviewEmptyFindingsContent is not null)
+                            {
+                                @OverviewEmptyFindingsContent
+                            }
+
+                            @if (_zeroUseModulesSummary.Count > 0)
+                            {
+                                <div class="fx-tel-zero-summary">
+                                    <strong>Zero-Activity UI Screens in @_snapshot.TimeWindowLabel (@_snapshot.UnusedCatalogScreenCount of @_snapshot.CatalogScreenCount):</strong>
+                                    <div class="fx-tel-badge-wrap">
+                                        @foreach (var item in _zeroUseModulesSummary)
+                                        {
+                                            <BadgeControl Variant="BadgeVariant.Secondary" Size="BadgeSize.Small" Text="@item" />
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </CardControl>
+                    </div>
+                </div>
+            }
+            else if (_selectedTab == 1 && _snapshot is not null)
+            {
+                <ControlActivityControl @ref="_controlActivity"
+                                        Theme="@ActiveTheme"
+                                        Snapshot="@_snapshot" />
+            }
+            else if (_selectedTab == 2 && _snapshot is not null)
+            {
+                <div class="fx-tel-grid-pane">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(_screenSubMode == "Screens")"
+                                           Tag="fx-tel-sub-screens"
+                                           OnClick='() => _screenSubMode = "Screens"'>
+                                Screens &amp; Forms (@FilteredScreenRows.Count)
+                            </ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_screenSubMode == "TasksReports")"
+                                           Tag="fx-tel-sub-tasks"
+                                           OnClick='() => _screenSubMode = "TasksReports"'>
+                                Tasks, Reports &amp; Inquiries (@FilteredTaskRows.Count)
+                            </ButtonControl>
+                        </div>
+
+                        <div class="fx-tel-pill-group">
+                            <span class="fx-tel-subbar-label">Usage Filter:</span>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "All")" Tag="fx-tel-st-all" OnClick='() => _usageStatusFilter = "All"'>All</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Unused")" Tag="fx-tel-st-unused" OnClick='() => _usageStatusFilter = "Unused"'>Unused (0)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Rare")" Tag="fx-tel-st-rare" OnClick='() => _usageStatusFilter = "Rare"'>Rarely Used</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Active")" Tag="fx-tel-st-active" OnClick='() => _usageStatusFilter = "Active"'>Active</ButtonControl>
+                        </div>
+                    </div>
+
+                    <div class="fx-tel-grid-host">
+                        @if (_screenSubMode == "Screens")
+                        {
+                            <GridControl TValue="FlexTelemetryScreenRow"
+                                         Tag="fx-grid-screens"
+                                         DataSource="@FilteredScreenRows"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ScreenTitle)" HeaderText="Screen / Function" Width="245px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Module)" HeaderText="Module" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UsageStatus)" HeaderText="Status" Width="135px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (FlexTelemetryScreenRow)context;
+                                            }
+                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.OpenCount)" HeaderText="Opens" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.FocusCount)" HeaderText="Tab Focuses" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ControlActionsOnScreen)" HeaderText="Control Actions" Width="110px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.GridOpsOnScreen)" HeaderText="Grid Ops" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UniqueUsers)" HeaderText="Users" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.TotalDwellMinutes)" HeaderText="Total Min" Width="90px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.AvgDwellSeconds)" HeaderText="Avg Sec" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.LastUsedLocal)" HeaderText="Last Used" Width="145px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Route)" HeaderText="Route" Width="175px" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                        else
+                        {
+                            <GridControl TValue="FlexTelemetryTaskRow"
+                                         Tag="fx-grid-tasks"
+                                         DataSource="@FilteredTaskRows"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.KindLabel)" HeaderText="Type" Width="95px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Name)" HeaderText="Task / Report / Inquiry Name" Width="300px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Module)" HeaderText="Module" Width="190px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UsageStatus)" HeaderText="Status" Width="140px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (FlexTelemetryTaskRow)context;
+                                            }
+                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.RunCount)" HeaderText="Executions" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UniqueUsers)" HeaderText="Users" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.LastRunLocal)" HeaderText="Last Executed" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                    </div>
+                </div>
+            }
+            else if (_selectedTab == 3 && _snapshot is not null)
+            {
+                <LogControl @ref="_logControl"
+                            Theme="@ActiveTheme"
+                            Snapshot="@_snapshot"
+                            ExternalHistogramSeries="@_timeSeriesHistogramSeries"
+                            ShowChrome="false" />
+            }
+            else if (_selectedTab == 4)
+            {
+                <SqlTelemetryControl @ref="_sqlControl"
+                                     Theme="@ActiveTheme"
+                                     Tenant="@EffectiveTenant"
+                                     SearchText="@_searchText"
+                                     RefreshVersion="@_refreshVersion" />
+            }
+            else if (_selectedTab >= BuiltInTabCount && AdditionalTabs is not null)
+            {
+                var customIdx = _selectedTab - BuiltInTabCount;
+                if (customIdx >= 0 && customIdx < AdditionalTabs.Count)
+                {
+                    var customTab = AdditionalTabs[customIdx];
+                    var ctx = new TelemetryCustomTabContext(
+                        ActiveTheme,
+                        EffectiveTenant,
+                        _searchText,
+                        _selectedDays,
+                        _selectedMinutesBack,
+                        _snapshot);
+                    @customTab.Content(ctx)
+                }
+            }
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    public sealed record FilterOption(string Value, string Text);
+    public sealed record RefreshOption(int Seconds, string Label);
+    public sealed record TimePreset(string Key, string Label, int DaysBack, int? MinutesBack);
+    public sealed record ThemeOption(TelemetryTheme Value, string Text);
+
+    public const int BuiltInTabCount = 5;
+    public const int ProductAnalyticsTabCount = 6;
+
+    private static readonly List<ThemeOption> ThemeOptions = new()
+    {
+        new(TelemetryTheme.VBClassic, "VB Classic"),
+        new(TelemetryTheme.GrafanaDark, "Grafana Dark"),
+        new(TelemetryTheme.ModernLight, "Modern Light")
+    };
+
+    private static readonly TimePreset[] TimePresets =
+    {
+        new("15m", "15m", 1, 15),
+        new("1h", "1h", 1, 60),
+        new("6h", "6h", 1, 360),
+        new("24h", "24h", 1, 1440),
+        new("7d", "7d", 7, null),
+        new("30d", "30d", 30, null),
+        new("90d", "90d", 90, null),
+        new("365d", "365d", 365, null)
+    };
+
+    private static readonly List<RefreshOption> RefreshOptions = new()
+    {
+        new(0, "Off"),
+        new(5, "5s Live"),
+        new(15, "15s Live"),
+        new(30, "30s Live")
+    };
+
+    private static readonly string[] HourBlockLabels =
+    {
+        "00h", "03h", "06h", "09h", "12h", "15h", "18h", "21h"
+    };
+
+    private static readonly string[] GrafanaPalette =
+    {
+        "#38bdf8", "#10b981", "#a855f7", "#f59e0b", "#f43f5e", "#3b82f6", "#14b8a6", "#eab308"
+    };
+
+    private static readonly string[] VbPalette =
+    {
+        "#0a246a", "#3a6ea5", "#2e7d32", "#8b5a00", "#8b0000", "#4b0082", "#00695c", "#5d4037"
+    };
+
+    private static readonly IReadOnlyList<GaugeRange> GaugeRanges = new[]
+    {
+        new GaugeRange(0, 35, "#dc2626", "Low"),
+        new GaugeRange(35, 70, "#d97706", "Moderate"),
+        new GaugeRange(70, 100, "#16a34a", "Healthy")
+    };
+
+    /// <summary>Logical screen/control title used in FlexKit hierarchical control locations.</summary>
+    [Parameter] public string Title { get; set; } = "TelemetryStudio";
+
+    /// <summary>When true, marks this TelemetryControl as a screen root in FlexControlLocation hierarchy.</summary>
+    [Parameter] public bool IsScreenRoot { get; set; }
+
+    /// <summary>Whether to render the top toolbar and global filter strip.</summary>
+    [Parameter] public bool ShowChrome { get; set; } = true;
+
+    /// <summary>
+    /// Default visual look and feel when <see cref="Theme"/> is not bound.
+    /// Defaults to <see cref="TelemetryTheme.VBClassic"/> (VB6 / Windows Classic desktop style),
+    /// with <see cref="TelemetryTheme.GrafanaDark"/> and <see cref="TelemetryTheme.ModernLight"/> selectable.
+    /// </summary>
+    [Parameter] public TelemetryTheme DefaultTheme { get; set; } = TelemetryTheme.VBClassic;
+
+    /// <summary>Optional two-way bound theme override.</summary>
+    [Parameter] public TelemetryTheme? Theme { get; set; }
+    [Parameter] public EventCallback<TelemetryTheme> ThemeChanged { get; set; }
+
+    /// <summary>Enables the Product Analytics workspace mode (Adoption, Funnels, Journeys, Cohorts, UX Friction, Pivot).</summary>
+    [Parameter] public bool EnableProductAnalytics { get; set; } = true;
+
+    /// <summary>Default workspace mode when <see cref="WorkspaceMode"/> is not bound.</summary>
+    [Parameter] public TelemetryWorkspaceMode DefaultWorkspaceMode { get; set; } = TelemetryWorkspaceMode.Observability;
+
+    /// <summary>Optional two-way bound workspace mode override.</summary>
+    [Parameter] public TelemetryWorkspaceMode? WorkspaceMode { get; set; }
+    [Parameter] public EventCallback<TelemetryWorkspaceMode> WorkspaceModeChanged { get; set; }
+
+    /// <summary>Prefix used when naming exported CSV / NDJSON / CLEF files.</summary>
+    [Parameter] public string ExportFilePrefix { get; set; } = "FlexKit";
+
+    /// <summary>Disables refresh button while an external host task (e.g. database scan) is running.</summary>
+    [Parameter] public bool Busy { get; set; }
+
+    /// <summary>Optional extra toolbar buttons injected by the host application.</summary>
+    [Parameter] public RenderFragment? ToolbarActions { get; set; }
+
+    /// <summary>Optional host-supplied tabs appended after the built-in FlexKit telemetry tabs.</summary>
+    [Parameter] public IReadOnlyList<TelemetryCustomTab>? AdditionalTabs { get; set; }
+
+    /// <summary>Optional 6th KPI card shown on the Overview tab.</summary>
+    [Parameter] public TelemetryCustomKpiCard? CustomKpiCard { get; set; }
+
+    /// <summary>Optional custom subtitle on the Active Users KPI card.</summary>
+    [Parameter] public string? UsersKpiSubText { get; set; }
+
+    /// <summary>Optional 2nd gauge card shown alongside UI Screen Coverage on the Overview tab.</summary>
+    [Parameter] public TelemetrySecondaryGauge? SecondaryGauge { get; set; }
+
+    /// <summary>Optional bulleted insights rendered in the Overview findings card.</summary>
+    [Parameter] public IReadOnlyList<string>? AdditionalFindings { get; set; }
+
+    /// <summary>Optional fallback content inside the Overview findings card when <see cref="AdditionalFindings"/> is empty.</summary>
+    [Parameter] public RenderFragment? OverviewEmptyFindingsContent { get; set; }
+
+    /// <summary>Notifies the host when the selected tenant/database changes.</summary>
+    [Parameter] public EventCallback<string> OnTenantChanged { get; set; }
+
+    /// <summary>Notifies the host when the search box text changes.</summary>
+    [Parameter] public EventCallback<string> OnSearchTextChanged { get; set; }
+
+    /// <summary>Notifies the host when the active tab index changes.</summary>
+    [Parameter] public EventCallback<int> OnSelectedTabChanged { get; set; }
+
+    /// <summary>Optional CSV builder invoked when Export CSV is clicked on a host <see cref="AdditionalTabs"/> tab.</summary>
+    [Parameter] public Func<int, (string Suffix, string CsvContent)?>? OnCustomTabExportCsv { get; set; }
+
+    private ControlActivityControl? _controlActivity;
+    private LogControl? _logControl;
+    private SqlTelemetryControl? _sqlControl;
+    private FeatureAdoptionControl? _featureAdoption;
+    private FunnelAnalyticsControl? _funnelAnalytics;
+    private UserJourneyControl? _userJourneys;
+    private RetentionCohortControl? _retentionCohorts;
+    private FrictionInsightsControl? _frictionInsights;
+    private TelemetryPivotControl? _telemetryPivot;
+    private BrowserInterop? _browserInterop;
+    private DefaultFlexTelemetryDataSource? _ownedFallbackSource;
+    private CancellationTokenSource? _autoRefreshCts;
+
+    private TelemetryTheme _internalTheme = TelemetryTheme.VBClassic;
+    private bool _themeInitialized;
+    private TelemetryWorkspaceMode _internalWorkspaceMode = TelemetryWorkspaceMode.Observability;
+    private bool _workspaceModeInitialized;
+    private int _selectedTab;
+    private int _refreshVersion;
+
+    private bool _canCrossTenant;
+    private string _defaultTenant = string.Empty;
+    private string _selectedTenant = string.Empty;
+    private string _tenantCaption = "Database";
+    private List<FilterOption> _tenantOptions = new();
+    private List<FilterOption> _moduleOptions = new() { new("All", "All Modules") };
+    private List<FilterOption> _userOptions = new() { new("All", "All Users") };
+
+    private string _selectedTimePresetKey = "30d";
+    private int _selectedDays = 30;
+    private int? _selectedMinutesBack;
+    private int _autoRefreshSeconds;
+    private string _selectedModule = "All";
+    private string _selectedUser = "All";
+    private string _searchText = string.Empty;
+
+    private string _volumeChartStyle = "Bars";
+    private string _screenSubMode = "Screens";
+    private string _usageStatusFilter = "All";
+
+    private FlexTelemetrySnapshot? _snapshot;
+    private FlexProductAnalyticsSnapshot? _productSnapshot;
+    private readonly List<ChartSeries> _timeSeriesHistogramSeries = new();
+    private readonly List<ChartSeries> _controlTypeDonutSeries = new();
+    private readonly List<ChartSeries> _screenHourHeatmapSeries = new();
+    private readonly List<ChartSeries> _screenParetoSeries = new();
+    private readonly List<ChartControl.ChartBar> _topScreensBars = new();
+    private readonly List<ChartControl.ChartBar> _topControlsBars = new();
+    private readonly List<string> _zeroUseModulesSummary = new();
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("TelemetryControl", () => Title, isScreenRoot: IsScreenRoot);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    public TelemetryTheme ActiveTheme => Theme ?? _internalTheme;
+    public TelemetryWorkspaceMode ActiveWorkspaceMode =>
+        EnableProductAnalytics ? (WorkspaceMode ?? _internalWorkspaceMode) : TelemetryWorkspaceMode.Observability;
+    public FlexTelemetrySnapshot? CurrentSnapshot => _snapshot;
+    public FlexProductAnalyticsSnapshot? CurrentProductSnapshot => _productSnapshot;
+    public int SelectedTabIndex => _selectedTab;
+    public string SearchQuery => _searchText;
+    public string EffectiveTenant => _canCrossTenant ? _selectedTenant : _defaultTenant;
+    private string TenantCaption => _tenantCaption;
+
+    private string EffectiveTenantLabel =>
+        string.Equals(_selectedTenant, "*", StringComparison.Ordinal)
+            ? $"All {_tenantCaption}s"
+            : (string.IsNullOrWhiteSpace(_selectedTenant) ? _defaultTenant : _selectedTenant);
+
+    private string ThemeClass => ActiveTheme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private List<TabStripItem> TabItems
+    {
+        get
+        {
+            if (ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)
+            {
+                return new List<TabStripItem>(ProductAnalyticsTabCount)
+                {
+                    new TabStripItem { Text = "Feature Adoption & Stickiness" },
+                    new TabStripItem { Text = "Conversion Funnels" },
+                    new TabStripItem { Text = "User Journeys & Flows" },
+                    new TabStripItem { Text = "Retention & Cohorts" },
+                    new TabStripItem { Text = "UX Friction & Replay" },
+                    new TabStripItem { Text = "Slice & Dice Pivot" }
+                };
+            }
+
+            var overviewLabel = ActiveTheme == TelemetryTheme.GrafanaDark ? "Grafana Overview" : "Telemetry Overview";
+            var logLabel = ActiveTheme == TelemetryTheme.GrafanaDark ? "Loki / CloudWatch Logs" : "Log Explorer";
+            var items = new List<TabStripItem>(BuiltInTabCount + (AdditionalTabs?.Count ?? 0))
+            {
+                new TabStripItem { Text = overviewLabel },
+                new TabStripItem { Text = "Control Telemetry & Grids" },
+                new TabStripItem { Text = "Screens, Tasks & Zero-Use" },
+                new TabStripItem { Text = logLabel },
+                new TabStripItem { Text = "SQL Queries" }
+            };
+            if (AdditionalTabs is not null)
+            {
+                foreach (var custom in AdditionalTabs)
+                    items.Add(new TabStripItem { Text = custom.Title });
+            }
+            return items;
+        }
+    }
+
+    private double UiScreenCoveragePercent =>
+        _snapshot is null || _snapshot.CatalogScreenCount <= 0
+            ? 0
+            : Math.Round(100.0 * Math.Min(_snapshot.UniqueScreensVisited, _snapshot.CatalogScreenCount) / _snapshot.CatalogScreenCount, 1);
+
+    private int ActiveControlCount =>
+        _snapshot?.RegisteredControlRows.Count(r => r.ActionCount > 0) ?? 0;
+
+    private double ActiveRegisteredControlsPercent =>
+        _snapshot is null || _snapshot.RegisteredControlCount <= 0
+            ? 0
+            : Math.Round(100.0 * ActiveControlCount / _snapshot.RegisteredControlCount, 1);
+
+    private List<FlexTelemetryScreenRow> FilteredScreenRows =>
+        (_snapshot?.ScreenRows ?? Array.Empty<FlexTelemetryScreenRow>())
+            .Where(r => MatchesUsageStatus(r.UsageStatus))
+            .ToList();
+
+    private List<FlexTelemetryTaskRow> FilteredTaskRows =>
+        (_snapshot?.TaskAndReportRows ?? Array.Empty<FlexTelemetryTaskRow>())
+            .Where(r => MatchesUsageStatus(r.UsageStatus))
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        RegisterControlPresence();
+        if (!_themeInitialized)
+        {
+            _internalTheme = DefaultTheme;
+            _themeInitialized = true;
+        }
+
+        if (!_workspaceModeInitialized)
+        {
+            _internalWorkspaceMode = DefaultWorkspaceMode;
+            _workspaceModeInitialized = true;
+        }
+
+        if (Services.GetService(typeof(ITelemetryTenantProvider)) is ITelemetryTenantProvider tenantProvider)
+        {
+            _tenantCaption = tenantProvider.TenantLabel;
+            _defaultTenant = await tenantProvider.GetDefaultTenantAsync();
+            _selectedTenant = _defaultTenant;
+            _canCrossTenant = await tenantProvider.CanSelectAcrossTenantsAsync();
+
+            if (_canCrossTenant)
+            {
+                var tenants = await tenantProvider.GetAvailableTenantsAsync();
+                _tenantOptions = new List<FilterOption> { new("*", $"All {_tenantCaption}s (Logs)") };
+                foreach (var t in tenants)
+                    _tenantOptions.Add(new FilterOption(t, t));
+                if (!string.IsNullOrWhiteSpace(_defaultTenant)
+                    && !_tenantOptions.Any(o => string.Equals(o.Value, _defaultTenant, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _tenantOptions.Add(new FilterOption(_defaultTenant, _defaultTenant));
+                }
+            }
+        }
+
+        RefreshSnapshot();
+    }
+
+    public async Task RefreshAsync()
+    {
+        var ds = ResolveDataSource();
+        try { await ds.FlushAsync(); } catch { }
+        _refreshVersion++;
+        RefreshSnapshot();
+        _sqlControl?.ReloadQueries();
+        RecordControlAction("Refreshed", EffectiveTenantLabel);
+    }
+
+    public void SelectWorkspaceMode(TelemetryWorkspaceMode mode)
+    {
+        _internalWorkspaceMode = mode;
+        _selectedTab = 0;
+        RefreshProductSnapshotIfNeeded();
+        StateHasChanged();
+    }
+
+    private async Task SwitchWorkspaceModeAsync(TelemetryWorkspaceMode nextMode)
+    {
+        if (ActiveWorkspaceMode == nextMode) return;
+        _internalWorkspaceMode = nextMode;
+        _selectedTab = 0;
+        RefreshProductSnapshotIfNeeded();
+        RecordControlAction("WorkspaceModeChanged", nextMode.ToString());
+        if (WorkspaceModeChanged.HasDelegate)
+            await WorkspaceModeChanged.InvokeAsync(nextMode);
+    }
+
+    public void SelectTab(int index)
+    {
+        var max = ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics
+            ? ProductAnalyticsTabCount - 1
+            : BuiltInTabCount + (AdditionalTabs?.Count ?? 0) - 1;
+        _selectedTab = Math.Clamp(index, 0, Math.Max(0, max));
+        StateHasChanged();
+    }
+
+    public void SelectCustomTab(string key)
+    {
+        if (AdditionalTabs is null) return;
+        for (int i = 0; i < AdditionalTabs.Count; i++)
+        {
+            if (string.Equals(AdditionalTabs[i].Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                _internalWorkspaceMode = TelemetryWorkspaceMode.Observability;
+                _selectedTab = BuiltInTabCount + i;
+                StateHasChanged();
+                return;
+            }
+        }
+    }
+
+    private void RefreshSnapshot()
+    {
+        var ds = ResolveDataSource();
+        var queryFilter = new FlexTelemetryQueryFilter
+        {
+            Tenant = EffectiveTenant,
+            DaysBack = _selectedDays,
+            MinutesBack = _selectedMinutesBack,
+            UserId = _selectedUser,
+            ModuleFilter = _selectedModule,
+            SearchText = _searchText
+        };
+        _snapshot = ds.BuildSnapshot(queryFilter, _defaultTenant);
+
+        _moduleOptions = new List<FilterOption> { new("All", "All Modules") };
+        foreach (var mod in _snapshot.AvailableModules)
+            _moduleOptions.Add(new FilterOption(mod, mod));
+
+        _userOptions = new List<FilterOption> { new("All", "All Users") };
+        foreach (var usr in _snapshot.AvailableUsers)
+            _userOptions.Add(new FilterOption(usr, usr));
+
+        RebuildCharts();
+        if (EnableProductAnalytics)
+            BuildProductSnapshotInternal(ds, queryFilter);
+    }
+
+    private void RefreshProductSnapshotIfNeeded()
+    {
+        if (!EnableProductAnalytics || _productSnapshot is not null)
+            return;
+
+        var ds = ResolveDataSource();
+        BuildProductSnapshotInternal(ds, new FlexTelemetryQueryFilter
+        {
+            Tenant = EffectiveTenant,
+            DaysBack = _selectedDays,
+            MinutesBack = _selectedMinutesBack,
+            UserId = _selectedUser,
+            ModuleFilter = _selectedModule,
+            SearchText = _searchText
+        });
+    }
+
+    private void BuildProductSnapshotInternal(ITelemetryDataSource ds, FlexTelemetryQueryFilter queryFilter)
+    {
+        var span = _selectedMinutesBack.HasValue
+            ? TimeSpan.FromMinutes(_selectedMinutesBack.Value * 2)
+            : TimeSpan.FromDays(Math.Max(30, _selectedDays * 2));
+        var sinceUtc = DateTime.UtcNow - span;
+
+        var rawEvents = ds.QueryEvents(sinceUtc, EffectiveTenant, _defaultTenant, maxCount: 50_000);
+        var sqlProvider = Services.GetService(typeof(IFlexSqlTelemetryProvider)) as IFlexSqlTelemetryProvider;
+        var sqlEntries = sqlProvider?.GetRecentQueries(
+            tenant: EffectiveTenant,
+            excludeBackgroundPolls: true,
+            maxCount: 2_000) ?? Array.Empty<FlexSqlTelemetryEntry>();
+        var catalog = Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider;
+        var workflows = Services.GetService(typeof(ITelemetryWorkflowProvider)) as ITelemetryWorkflowProvider;
+
+        _productSnapshot = FlexProductAnalyticsEngine.BuildProductSnapshot(
+            rawEvents,
+            sqlEntries,
+            catalog,
+            workflows,
+            queryFilter,
+            _defaultTenant);
+    }
+
+    private void RebuildCharts()
+    {
+        _timeSeriesHistogramSeries.Clear();
+        _controlTypeDonutSeries.Clear();
+        _screenHourHeatmapSeries.Clear();
+        _screenParetoSeries.Clear();
+        _topScreensBars.Clear();
+        _topControlsBars.Clear();
+        _zeroUseModulesSummary.Clear();
+
+        if (_snapshot is null)
+            return;
+
+        var isVb = ActiveTheme == TelemetryTheme.VBClassic;
+        var palette = isVb ? VbPalette : GrafanaPalette;
+        var chartType = _volumeChartStyle == "Area" ? ChartType.StackedArea : ChartType.StackedBar;
+
+        var clicksSeries = new ChartSeries("Control Clicks", chartType, color: isVb ? "#0a246a" : "#10b981");
+        var gridsSeries = new ChartSeries("Grid Ops", chartType, color: isVb ? "#3a6ea5" : "#a855f7");
+        var inputsSeries = new ChartSeries("Input Commits", chartType, color: isVb ? "#2e7d32" : "#f59e0b");
+        var opensSeries = new ChartSeries("Screen Opens", chartType, color: isVb ? "#8b5a00" : "#38bdf8");
+        var tasksSeries = new ChartSeries("Tasks & Reports", chartType, color: isVb ? "#6a1b9a" : "#3b82f6");
+
+        foreach (var pt in _snapshot.TimeSeriesBuckets)
+        {
+            clicksSeries.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ButtonClicks));
+            gridsSeries.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.GridOperations));
+            inputsSeries.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ControlChanges));
+            opensSeries.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ScreenOpens));
+            tasksSeries.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.TasksAndReports));
+        }
+
+        _timeSeriesHistogramSeries.Add(clicksSeries);
+        _timeSeriesHistogramSeries.Add(gridsSeries);
+        _timeSeriesHistogramSeries.Add(inputsSeries);
+        _timeSeriesHistogramSeries.Add(opensSeries);
+        _timeSeriesHistogramSeries.Add(tasksSeries);
+
+        var ctlDonut = new ChartSeries("Control Types", ChartType.Donut);
+        int ci = 0;
+        foreach (var ct in _snapshot.ControlTypeRows.Take(8))
+            ctlDonut.DataPoints.Add(new ChartDataPoint(ct.ControlType, ct.EventCount, palette[ci++ % palette.Length]));
+        if (ctlDonut.DataPoints.Count > 0)
+            _controlTypeDonutSeries.Add(ctlDonut);
+
+        foreach (var row in _snapshot.ScreenHourHeatmap)
+        {
+            var heatSeries = new ChartSeries(Shorten(row.Screen, 14), ChartType.Heatmap);
+            for (int b = 0; b < HourBlockLabels.Length && b < row.BlockCounts.Length; b++)
+                heatSeries.DataPoints.Add(new ChartDataPoint(HourBlockLabels[b], row.BlockCounts[b]));
+            _screenHourHeatmapSeries.Add(heatSeries);
+        }
+
+        var pareto = new ChartSeries("Screen Activity", ChartType.Pareto, color: isVb ? "#0a246a" : "#38bdf8");
+        foreach (var s in _snapshot.ScreenRows
+                     .Select(r => new { r.ScreenTitle, Score = r.OpenCount + r.ControlActionsOnScreen + r.GridOpsOnScreen })
+                     .Where(x => x.Score > 0)
+                     .OrderByDescending(x => x.Score)
+                     .Take(8))
+        {
+            pareto.DataPoints.Add(new ChartDataPoint(Shorten(s.ScreenTitle, 14), s.Score));
+        }
+        if (pareto.DataPoints.Count > 0)
+            _screenParetoSeries.Add(pareto);
+
+        foreach (var s in _snapshot.ScreenRows.Where(r => r.OpenCount > 0).Take(8))
+            _topScreensBars.Add(new ChartControl.ChartBar(s.ScreenTitle, s.OpenCount, isVb ? "#0a246a" : "#38bdf8"));
+
+        foreach (var c in _snapshot.ControlRows.Take(8))
+        {
+            var lbl = Shorten($"{c.Screen}: {c.Control} ({c.Action})", 44);
+            _topControlsBars.Add(new ChartControl.ChartBar(lbl, c.ActionCount, isVb ? "#2e7d32" : "#10b981"));
+        }
+
+        _zeroUseModulesSummary.AddRange(
+            _snapshot.ScreenRows
+                .Where(r => r.OpenCount == 0 && r.ControlActionsOnScreen == 0 && r.GridOpsOnScreen == 0)
+                .GroupBy(r => r.Module)
+                .Select(g => $"{g.Key}: {g.Count()} unused")
+                .OrderByDescending(s => s));
+    }
+
+    private ITelemetryDataSource ResolveDataSource()
+    {
+        if (Services.GetService(typeof(ITelemetryDataSource)) is ITelemetryDataSource registered)
+            return registered;
+
+        _ownedFallbackSource ??= new DefaultFlexTelemetryDataSource(
+            Services.GetService(typeof(IFlexControlLogSink)) as IFlexControlLogSink,
+            Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider);
+        return _ownedFallbackSource;
+    }
+
+    private async Task OnThemeSelectedAsync(TelemetryTheme nextTheme)
+    {
+        _internalTheme = nextTheme;
+        RebuildCharts();
+        RecordControlAction("ThemeChanged", nextTheme.ToString());
+        if (ThemeChanged.HasDelegate)
+            await ThemeChanged.InvokeAsync(nextTheme);
+    }
+
+    private void SetVolumeChartStyle(string style)
+    {
+        _volumeChartStyle = style;
+        RebuildCharts();
+    }
+
+    private void SelectTimePreset(TimePreset preset)
+    {
+        _selectedTimePresetKey = preset.Key;
+        _selectedDays = preset.DaysBack;
+        _selectedMinutesBack = preset.MinutesBack;
+        RefreshSnapshot();
+    }
+
+    private async Task OnTenantSelectionChangedAsync(string? nextTenant)
+    {
+        _selectedTenant = nextTenant ?? _defaultTenant;
+        RefreshSnapshot();
+        if (OnTenantChanged.HasDelegate)
+            await OnTenantChanged.InvokeAsync(_selectedTenant);
+    }
+
+    private void OnModuleChanged(string? mod)
+    {
+        _selectedModule = mod ?? "All";
+        RefreshSnapshot();
+    }
+
+    private void OnUserChanged(string? user)
+    {
+        _selectedUser = user ?? "All";
+        RefreshSnapshot();
+    }
+
+    private async Task OnSearchChangedAsync(string? text)
+    {
+        _searchText = text ?? string.Empty;
+        RefreshSnapshot();
+        if (OnSearchTextChanged.HasDelegate)
+            await OnSearchTextChanged.InvokeAsync(_searchText);
+    }
+
+    private async Task OnTabChangedAsync(int idx)
+    {
+        _selectedTab = idx;
+        if (OnSelectedTabChanged.HasDelegate)
+            await OnSelectedTabChanged.InvokeAsync(idx);
+    }
+
+    private void OnAutoRefreshChanged(int seconds)
+    {
+        _autoRefreshSeconds = seconds;
+        StopAutoRefreshTimer();
+        if (seconds > 0)
+        {
+            var cts = new CancellationTokenSource();
+            _autoRefreshCts = cts;
+            _ = RunAutoRefreshLoopAsync(seconds, cts.Token);
+        }
+    }
+
+    private async Task RunAutoRefreshLoopAsync(int seconds, CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Clamp(seconds, 3, 300)));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(() =>
+                {
+                    if (!Busy)
+                    {
+                        _refreshVersion++;
+                        RefreshSnapshot();
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void StopAutoRefreshTimer()
+    {
+        if (_autoRefreshCts is not null)
+        {
+            try { _autoRefreshCts.Cancel(); } catch { }
+            _autoRefreshCts.Dispose();
+            _autoRefreshCts = null;
+        }
+    }
+
+    private async Task ExportStructuredLogsAsync(bool clefFormat)
+    {
+        if (_logControl is not null)
+        {
+            await _logControl.ExportStructuredAsync(clefFormat, ExportFilePrefix);
+            return;
+        }
+
+        var ds = ResolveDataSource();
+        try { await ds.FlushAsync(); } catch { }
+        var rows = _snapshot?.RecentEvents ?? Array.Empty<FlexTelemetryEventRow>();
+        var sb = new StringBuilder(rows.Count * 240);
+        foreach (var r in rows)
+            sb.AppendLine(clefFormat ? r.SerilogClefJson : r.CloudWatchJson);
+
+        var ext = clefFormat ? "clef" : "ndjson";
+        var label = clefFormat ? "serilog" : "cloudwatch";
+        var fileName = $"{ExportFilePrefix}-{label}-logs-{DateTime.Now:yyyyMMdd-HHmm}.{ext}";
+        await DownloadBytesAsync(Encoding.UTF8.GetBytes(sb.ToString()), fileName, "application/x-ndjson");
+        RecordControlAction("ExportedStructuredLogs", label, $"rows={rows.Count}");
+    }
+
+    private async Task ExportCurrentViewCsvAsync()
+    {
+        if (ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)
+        {
+            (string suffixPa, string csvPa) = _selectedTab switch
+            {
+                0 when _featureAdoption is not null => _featureAdoption.BuildCurrentCsv(),
+                1 when _funnelAnalytics is not null => _funnelAnalytics.BuildCurrentCsv(),
+                2 when _userJourneys is not null => _userJourneys.BuildCurrentCsv(),
+                3 when _retentionCohorts is not null => _retentionCohorts.BuildCurrentCsv(),
+                4 when _frictionInsights is not null => _frictionInsights.BuildCurrentCsv(),
+                5 when _telemetryPivot is not null => _telemetryPivot.BuildCurrentCsv(),
+                _ => BuildScreensOrTasksCsv()
+            };
+            var paFile = $"{ExportFilePrefix}-{suffixPa}-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var paBytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csvPa)).ToArray();
+            await DownloadBytesAsync(paBytes, paFile, "text/csv");
+            RecordControlAction("ExportedCsv", suffixPa);
+            return;
+        }
+
+        if (_selectedTab == 3 && _logControl is not null)
+        {
+            await _logControl.ExportCsvAsync(ExportFilePrefix);
+            return;
+        }
+
+        string suffix;
+        string csvBody;
+
+        if (_selectedTab >= BuiltInTabCount && OnCustomTabExportCsv is not null)
+        {
+            var customExport = OnCustomTabExportCsv(_selectedTab - BuiltInTabCount);
+            if (customExport.HasValue)
+            {
+                suffix = customExport.Value.Suffix;
+                csvBody = customExport.Value.CsvContent;
+            }
+            else
+            {
+                (suffix, csvBody) = BuildScreensOrTasksCsv();
+            }
+        }
+        else if (_selectedTab == 1 && _controlActivity is not null)
+        {
+            (suffix, csvBody) = _controlActivity.BuildCurrentCsv();
+        }
+        else if (_selectedTab == 4 && _sqlControl is not null)
+        {
+            suffix = "sql-queries";
+            csvBody = _sqlControl.BuildCsv();
+        }
+        else
+        {
+            (suffix, csvBody) = BuildScreensOrTasksCsv();
+        }
+
+        var fileName = $"{ExportFilePrefix}-{suffix}-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csvBody)).ToArray();
+        await DownloadBytesAsync(bytes, fileName, "text/csv");
+        RecordControlAction("ExportedCsv", suffix);
+    }
+
+    private (string Suffix, string CsvContent) BuildScreensOrTasksCsv()
+    {
+        var sb = new StringBuilder();
+        if (_selectedTab == 2 && _screenSubMode == "TasksReports")
+        {
+            sb.AppendLine("Type,Name,Module,Status,Executions,Users,LastExecuted");
+            foreach (var r in FilteredTaskRows)
+                sb.AppendLine($"{Csv(r.KindLabel)},{Csv(r.Name)},{Csv(r.Module)},{Csv(r.UsageStatus)},{r.RunCount},{r.UniqueUsers},{Csv(r.LastRunLocal?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))}");
+            return ("tasks-reports", sb.ToString());
+        }
+
+        sb.AppendLine("Screen,Module,Status,Opens,TabFocuses,ControlActions,GridOps,Users,TotalDwellMinutes,AvgDwellSeconds,LastUsed,Route");
+        foreach (var r in FilteredScreenRows)
+            sb.AppendLine($"{Csv(r.ScreenTitle)},{Csv(r.Module)},{Csv(r.UsageStatus)},{r.OpenCount},{r.FocusCount},{r.ControlActionsOnScreen},{r.GridOpsOnScreen},{r.UniqueUsers},{r.TotalDwellMinutes.ToString("0.0", CultureInfo.InvariantCulture)},{r.AvgDwellSeconds.ToString("0.0", CultureInfo.InvariantCulture)},{Csv(r.LastUsedLocal?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))},{Csv(r.Route)}");
+        return ("screen-usage", sb.ToString());
+    }
+
+    private async Task DownloadBytesAsync(byte[] bytes, string fileName, string contentType)
+    {
+        if (Services.GetService(typeof(ITelemetryExportHandler)) is ITelemetryExportHandler handler)
+        {
+            await handler.ExportBytesAsync(bytes, fileName, contentType);
+            return;
+        }
+
+        _browserInterop ??= new BrowserInterop(JSRuntime);
+        await _browserInterop.InvokeAsync<object?>("download", null, new { bytes, name = fileName, type = contentType });
+    }
+
+    private bool MatchesUsageStatus(string status) => _usageStatusFilter switch
+    {
+        "Unused" => status.StartsWith("Unused", StringComparison.OrdinalIgnoreCase),
+        "Rare" => status.StartsWith("Rarely", StringComparison.OrdinalIgnoreCase),
+        "Active" => status is "Active" or "Moderate",
+        _ => true
+    };
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static BadgeVariant StatusBadgeVariant(string status)
+    {
+        if (status.StartsWith("Unused", StringComparison.OrdinalIgnoreCase)) return BadgeVariant.Danger;
+        if (status.StartsWith("Rarely", StringComparison.OrdinalIgnoreCase)) return BadgeVariant.Warning;
+        if (status.Equals("Moderate", StringComparison.OrdinalIgnoreCase)) return BadgeVariant.Info;
+        return BadgeVariant.Success;
+    }
+
+    private static string Shorten(string text, int max) =>
+        text.Length > max ? text[..(max - 3)] + "..." : text;
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        StopAutoRefreshTimer();
+        _ownedFallbackSource?.Dispose();
+        if (_browserInterop is not null)
+            await _browserInterop.DisposeAsync();
+    }
+}

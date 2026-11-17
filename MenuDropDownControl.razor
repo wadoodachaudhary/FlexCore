@@ -3,6 +3,7 @@
 @using Microsoft.JSInterop
 @implements IAsyncDisposable
 @inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
 
 <div class="@ResolvedCssClass" contenteditable="false" @onclick:stopPropagation="true">
     @if (SplitButton)
@@ -35,7 +36,7 @@
                     role="menuitem"
                     aria-label="@ResolvedArrowLabel"
                     aria-haspopup="true"
-                    aria-expanded="@IsOpen"
+                    aria-expanded="@(IsOpen ? "true" : "false")"
                     @onclick="OnTriggerClicked"
                     @onkeydown="OnTriggerKeyDown"
                     @onkeydown:preventDefault="true"
@@ -61,7 +62,7 @@
                 disabled="@Disabled"
                 role="menuitem"
                 aria-haspopup="true"
-                aria-expanded="@IsOpen"
+                aria-expanded="@(IsOpen ? "true" : "false")"
                 @onclick="OnTriggerClicked"
                 @onkeydown="OnTriggerKeyDown"
                 @onkeydown:preventDefault="true"
@@ -91,7 +92,7 @@
                  contenteditable="false"
                  role="menu"
                  @onkeydown="OnPanelKeyDown"
-                 @onmousemove="OnPanelMouseMove"
+                 @onmousemove="@(_keyboardNavigationActive ? EventCallback.Factory.Create<MouseEventArgs>(this, OnPanelMouseMove) : default)"
                  @onkeydown:preventDefault="true"
                  @onkeydown:stopPropagation="true">
                 @ChildContent
@@ -138,6 +139,18 @@
     private IJSObjectReference? _menuJsModule;
 
     internal bool IsOpen => Parent?.ActiveMenu == this || (Parent is null && _isOpen);
+
+    // A link inside the panel navigates without telling the menu, so an open menu would stay open over the new page
+    // (a persistent layout keeps this component alive). Any change of address closes it.
+    protected override void OnInitialized() => Navigation.LocationChanged += OnLocationChanged;
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (IsOpen)
+        {
+            _ = InvokeAsync(RequestClose);
+        }
+    }
 
     internal void RequestClose()
     {
@@ -460,6 +473,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        Navigation.LocationChanged -= OnLocationChanged;
         if (_menuJsModule is not null)
         {
             try { await _menuJsModule.DisposeAsync(); }

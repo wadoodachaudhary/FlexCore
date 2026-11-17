@@ -1,0 +1,2 @@
+.fx-report-drill-object { cursor: pointer; }
+.fx-report-drill-object:focus-visible { outline: 1px solid #316ac5; outline-offset: -1px; }

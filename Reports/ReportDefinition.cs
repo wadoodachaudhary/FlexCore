@@ -7,7 +7,14 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 public class ReportDefinition
 {
+    internal ReportSqlSelectionPlan? PositionedSqlSelection { get; set; }
+    internal ReportSqlIntegerSelectionPlan? PositionedIntegerSelection { get; set; }
+    internal ReportSqlTextSelectionPlan? PositionedTextSelection { get; set; }
+    private string? _preparedSql;
+    private string? _preparedSqlTemplate;
     public ReportPositionedLayout? PositionedLayout { get; set; }
+    /// <summary>Authored detail print visibility for the tabular renderer; never filters its source rows.</summary>
+    public ReportTabularLayout? TabularLayout { get; set; }
     /// <summary>Report identifier (typically the .rpt filename without extension).</summary>
     public string ReportId { get; set; } = "";
 
@@ -25,6 +32,76 @@ public class ReportDefinition
 
     /// <summary>SQL query that produces the report data. Use @ParameterName for parameter placeholders.</summary>
     public string Sql { get; set; } = "";
+
+    internal IReadOnlyList<string> ExpandedSqlStringParameters { get; set; } = [];
+
+    /// <summary>
+    /// Validates actual values required by positioned SQL narrowing. Call before
+    /// executing <see cref="Sql"/> directly; ReportWriterControl does so automatically.
+    /// Scalar narrowing requires actual string values where declared. Bounded
+    /// date/string narrowing also requires an unspecified-kind midnight DateTime
+    /// and typed scalar/expanded string bindings, then supplies reserved guard
+    /// and constant parameters. No text/date or list-element coercion is performed.
+    /// </summary>
+    public void ValidateSqlParameters(IDictionary<string, object>? parameters)
+    {
+        PositionedSqlSelection?.ValidateAndBind(parameters);
+        foreach (var name in (PositionedLayout?.SqlStringParameters ?? []).Concat(ExpandedSqlStringParameters).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var matches = parameters?.Where(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray() ?? [];
+            if (matches.Length != 1 || matches[0].Value is not string)
+                throw new InvalidDataException($"Positioned SQL parameter '{name}' requires one non-null string value; numeric, date, range and list values cannot be coerced safely for this selector.");
+        }
+    }
+
+    /// <summary>
+    /// Validates SQL bindings and returns an execution-local definition. Proven
+    /// integral selectors use direct parameter equality only for exact, in-range
+    /// integer or decimal values; uncertain values keep the conservative SQL.
+    /// The original definition and numeric parameter values are never changed.
+    /// Re-preparing this copy uses its original guarded template, unless the
+    /// caller has replaced its SQL, in which case that SQL is left untouched.
+    /// </summary>
+    public ReportDefinition PrepareSqlExecution(IDictionary<string, object>? parameters)
+    {
+        ValidateSqlParameters(parameters);
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        var copy = (ReportDefinition)MemberwiseClone();
+        copy.PositionedSqlSelection = PositionedSqlSelection?.Clone();
+        var sql = PositionedTextSelection?.Prepare(template, template, parameters) ?? template;
+        copy.Sql = PositionedIntegerSelection?.Prepare(sql, template, parameters) ?? sql;
+        copy._preparedSqlTemplate = template;
+        copy._preparedSql = copy.Sql;
+        return copy;
+    }
+
+    // Only internally composed copies of the unchanged generated SQL retain the
+    // specialization plan. Caller-supplied SQL is not parsed or rewritten.
+    internal ReportSqlIntegerSelectionPlan? CopyIntegerSelectionForSql(string sql)
+        => PositionedIntegerSelection is { } plan && Sql == plan.TemplateSql ? plan.WithTemplate(sql) : null;
+    internal ReportSqlTextSelectionPlan? CopyTextSelectionForSql(string sql)
+        => PositionedTextSelection is { } plan && Sql == plan.TemplateSql ? plan.WithTemplate(sql) : null;
+
+    // The public list rewriter can also receive an execution copy. Restore
+    // only that copy's still-unchanged generated template before rewriting so
+    // later unsafe numeric values cannot inherit an earlier direct equality.
+    internal ReportSqlIntegerSelectionPlan? RestoreIntegerSelectionForRewrite()
+    {
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        if (PositionedIntegerSelection is not { } plan || template != plan.TemplateSql) return null;
+        Sql = template;
+        _preparedSql = _preparedSqlTemplate = null;
+        return plan;
+    }
+
+    internal ReportSqlTextSelectionPlan? RestoreTextSelectionForRewrite()
+    {
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        if (PositionedTextSelection is not { } plan || template != plan.TemplateSql) return null;
+        Sql = template;
+        _preparedSql = _preparedSqlTemplate = null;
+        return plan;
+    }
 
     /// <summary>
     /// Optional secondary SQL that selects the full group-hierarchy (all group levels,
@@ -95,8 +172,17 @@ public class ReportColumn
     /// <summary>Display header text.</summary>
     public string HeaderText { get; set; } = "";
 
+    /// <summary>Authored column-heading weight. Null retains the viewer's default heading style.</summary>
+    public bool? HeaderBold { get; set; }
+
     /// <summary>Column width in pixels (approximate — CSS may adjust).</summary>
     public int Width { get; set; } = 100;
+
+    /// <summary>The Crystal object's authored width in pixels (0 when unknown). <see cref="Width"/> may be narrowed to fit the page.</summary>
+    public int AuthoredWidth { get; set; }
+
+    /// <summary>Authored no-grow field height in pixels. Limits HTML display only; stored/exported text remains complete.</summary>
+    public double? NoGrowHeight { get; set; }
 
     /// <summary>Text alignment.</summary>
     public ReportAlignment Alignment { get; set; } = ReportAlignment.Left;
@@ -178,16 +264,16 @@ public class ReportSubreportLink
 /// <summary>One Crystal SubReportLink mapping from a main-report row field to a subreport field.</summary>
 public class ReportSubreportParameterLink
 {
-    /// <summary>Crystal linked parameter name, e.g. <c>Pm-tblSalesSheetMaster.Worksheet</c>.</summary>
+    /// <summary>Crystal linked parameter name, e.g. <c>Pm-tblOrders.OrderID</c>.</summary>
     public string LinkedParameterName { get; set; } = "";
 
-    /// <summary>Main report field reference as exported by Crystal, e.g. <c>{tblSalesSheetMaster.Worksheet}</c>.</summary>
+    /// <summary>Main report field reference as exported by Crystal, e.g. <c>{tblOrders.OrderID}</c>.</summary>
     public string MainReportFieldName { get; set; } = "";
 
-    /// <summary>Main report SQL alias selected into the row, e.g. <c>tblSalesSheetMaster_Worksheet</c>.</summary>
+    /// <summary>Main report SQL alias selected into the row, e.g. <c>tblOrders_OrderID</c>.</summary>
     public string MainReportAlias { get; set; } = "";
 
-    /// <summary>Subreport field reference as exported by Crystal, e.g. <c>{SalesSheetCostsViewNoCS.Worksheet}</c>.</summary>
+    /// <summary>Subreport field reference as exported by Crystal, e.g. <c>{OrderLinesView.OrderID}</c>.</summary>
     public string SubreportFieldName { get; set; } = "";
 
     /// <summary>Subreport table alias used in the generated SQL filter.</summary>
@@ -248,12 +334,12 @@ public class ReportGroup
     public string HeaderFormat { get; set; } = "{Value}";
 
     /// <summary>SQL-safe alias of a column carrying this group's description
-    /// (e.g. "PREPARATION" alongside the "03000" code). Sourced from
+    /// (e.g. "SITE WORK" alongside the "03000" code). Sourced from
     /// FieldObjects placed in the matching <c>&lt;Area Kind="GroupHeader"&gt;</c>
     /// section in the Crystal XML — typically a second alias of the
     /// lookup table joined on the group's code field
-    /// (Job Budget Report v1's <c>tblEstPhases_1.Description</c> joined on
-    /// <c>tblEstPhases.GroupPhaseValue</c> is the canonical example).
+    /// (<c>tblPhases_1.Description</c> joined on
+    /// <c>tblPhases.GroupPhaseValue</c> is the canonical example).
     /// Empty when the group has no description column.</summary>
     public string DescriptionField { get; set; } = "";
 
@@ -288,7 +374,8 @@ public class ReportParameter
 
     /// <summary>Original parameter name from Crystal XML, including spaces and "(optional)" hints.
     /// Used as the right-aligned secondary label in the parameter dialog (matches the
-    /// Crystal native dialog's panel title).</summary>
+    /// Crystal native dialog's panel title); for an Available/Selected pair it is the
+    /// Selected header's caption, shown only when it differs from the prompt.</summary>
     public string DisplayName { get; set; } = "";
 
     /// <summary>Display prompt text.</summary>
@@ -297,8 +384,15 @@ public class ReportParameter
     /// <summary>Default value.</summary>
     public string DefaultValue { get; set; } = "";
 
+    /// <summary>The report supplies a current, initial, or default value, including an explicit
+    /// empty string. Distinguishes an authored blank from an absent default for session fallbacks.</summary>
+    public bool HasAuthoredDefaultValue { get; set; }
+
     /// <summary>Data type.</summary>
     public ReportParameterType ParameterType { get; set; } = ReportParameterType.String;
+
+    /// <summary>False for an unused native parameter definition; unused fields are never prompted.</summary>
+    public bool IsInUse { get; set; } = true;
 
     /// <summary>If true, parameter is required before the report can run.</summary>
     public bool Required { get; set; } = true;
@@ -307,6 +401,10 @@ public class ReportParameter
     /// parameters where empty value is treated as "no filter" (e.g. <c>Job like '' + '*'</c>
     /// matches all jobs). The dialog skips required-empty validation for these.</summary>
     public bool IsOptional { get; set; }
+
+    /// <summary>A string prompt accepts an explicitly supplied empty string, including a blank-key
+    /// multi-value choice. This does not make the parameter optional or allow a missing list selection.</summary>
+    public bool AllowEmptyString { get; set; }
 
     /// <summary>If true, parameter supports multiple comma-separated values.</summary>
     public bool AllowMultiple { get; set; }
@@ -334,7 +432,7 @@ public class ReportParameter
     /// parameter is rendered as a dual-list-box in the parameter dialog.
     ///
     /// <para>
-    /// Two sources fill this in:
+    /// Three sources fill this in, in ascending precedence:
     /// <list type="bullet">
     ///   <item><description>
     ///   <b>Auto-derived from binding</b> — the default. When
@@ -344,6 +442,13 @@ public class ReportParameter
     ///   BindingTable WHERE [DivisionID=@DivisionID]</c>. No host config
     ///   needed — picklist follows the Crystal XML wherever the report
     ///   filters on <c>{T.F} = {?Param}</c>.
+    ///   </description></item>
+    ///   <item><description>
+    ///   <b>Authored (Crystal LOV)</b> — a <c>&lt;ParameterPickList&gt;</c> child written
+    ///   by the native converter from the report's PromptManager stream: one row per
+    ///   distinct value of the LOV's value field in its table (<c>MIN</c> of the description
+    ///   field per value), sorted per the prompt, no other filter. Marked by
+    ///   <see cref="PickListIsAuthored"/>; wins over the binding form.
     ///   </description></item>
     ///   <item><description>
     ///   <b>Explicit override</b> — a non-Crystal-native
@@ -370,9 +475,20 @@ public class ReportParameter
     public string? PickListSql { get; set; }
 
     /// <summary>
+    /// True when <see cref="PickListSql"/> is the report's own prompt list: Crystal's authored
+    /// dynamic list of values, carried in the XML as <c>&lt;ParameterPickList&gt;</c> (the same
+    /// table, value field, description field and sort as Crystal's "Enter Parameter Values"
+    /// dialog). An authored list is authoritative — it takes precedence over host name-based
+    /// lists and over dependent pick-list providers, which must not replace or narrow it. False
+    /// for an explicit <c>&lt;PickListSql&gt;</c> override and for lists synthesized from the
+    /// record-selection binding.
+    /// </summary>
+    public bool PickListIsAuthored { get; set; }
+
+    /// <summary>
     /// Table the parameter is bound to in the Crystal RecordSelectionFormula
-    /// (e.g. <c>"AssemblyCostsAllCommunities"</c> when the formula says
-    /// <c>{AssemblyCostsAllCommunities.Assembly} = {?Model}</c>). Populated
+    /// (e.g. <c>"CostsView"</c> when the formula says
+    /// <c>{CostsView.Assembly} = {?Model}</c>). Populated
     /// by <c>CrystalXmlReportLoader</c>. Empty when no equality/IN binding
     /// against this parameter was found.
     /// </summary>
@@ -411,6 +527,6 @@ public enum ReportColumnType { Text, Integer, Decimal, Currency, Date, DateTime,
 
 public enum ReportSortDirection { Ascending, Descending }
 
-public enum ReportAggregateType { Sum, Count, Average, Min, Max, Percent, DistinctCount, Median }
+public enum ReportAggregateType { Sum, Count, Average, Min, Max, Percent, DistinctCount, Median, WeightedAverage }
 
 public enum ReportParameterType { String, Integer, Decimal, Date, Boolean }

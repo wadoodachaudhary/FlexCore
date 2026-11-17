@@ -123,6 +123,15 @@ public sealed class GridExportColumn
     public GridPrintCellIcon PrintCellIcon { get; set; }
 }
 
+public sealed class GridExportCellStyle
+{
+    public string? ForeColorHex { get; set; }
+    public string? BackColorHex { get; set; }
+    public bool? Bold { get; set; }
+    public bool? Italic { get; set; }
+    public bool? Strikethrough { get; set; }
+}
+
 public sealed class GridExportRow
 {
     public GridExportRow()
@@ -148,6 +157,11 @@ public sealed class GridExportRow
     /// <summary>Optional per-cell .NET formats for native XLSX values.</summary>
     public List<string?> XlsxFormats { get; } = new();
     public bool IsBold { get; set; }
+    public bool IsItalic { get; set; }
+    public bool IsStrikethrough { get; set; }
+    public string? ForeColorHex { get; set; }
+    public string? BackColorHex { get; set; }
+    public List<GridExportCellStyle?> CellStyles { get; } = new();
 
     /// <summary>
     /// Allows XLSX output to apply formulas declared by the corresponding
@@ -161,6 +175,8 @@ public sealed class GridExportTable
     public string Title { get; set; } = "Export";
     public string SheetName { get; set; } = "Export";
     public bool IncludeHeaderRow { get; set; } = true;
+    /// <summary>XLSX only: preserve oversized text in linked continuation rows on extra sheets.</summary>
+    public bool PreserveOversizedText { get; set; }
     public List<GridExportColumn> Columns { get; } = new();
     public List<GridExportRow> Rows { get; } = new();
     public HashSet<int> HighlightColumnIndexes { get; } = new();
@@ -262,35 +278,67 @@ public static class GridExporter
         }
     }
 
-    private static byte[] BuildXlsx(GridExportTable table)
+    /// <summary>XLSX of a table whose rows are produced on demand. <paramref name="rowAt"/> is read in order once per
+    /// writer pass, must give the same row each time, and may return one reused row object.</summary>
+    internal static GridExportResult ExportXlsx(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt, string fileName) =>
+        new(BuildXlsx(table, rowCount, rowAt), EnsureExtension(fileName, DefaultExtension(GridExportFormat.Xlsx)), XlsxMime);
+
+    private static byte[] BuildXlsx(GridExportTable table) => BuildXlsx(table, table.Rows.Count, index => table.Rows[index]);
+
+    private static byte[] BuildXlsx(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt)
     {
         // Forwarded to FlexCore's native XlsxWriter. Same visual result as the
         // previous ClosedXML implementation — bold shaded header, thin cell
         // borders, highlight fill, number formats, alignment, column widths —
-        // without ClosedXML or its DocumentFormat.OpenXml chain.
-        var sheet = new XlsxSheet { Name = XlsxWriter.SanitizeSheetName(table.SheetName) };
-        var formulaFields = BuildFormulaFieldMap(table.Columns);
-        var rowIndex = 1;
-
-        if (table.IncludeHeaderRow && table.Columns.Count > 0)
+        // without ClosedXML or its DocumentFormat.OpenXml chain. The writer reads
+        // the cells a row at a time (XlsxRows), so no whole-sheet cell model is built.
+        var sheet = new XlsxSheet
         {
-            var header = sheet.AddRow();
-            foreach (var column in table.Columns)
-            {
-                header.Add(new XlsxCell
-                {
-                    Value = column.Header,
-                    Bold = true,
-                    FillHex = "eeeeee",
-                    BorderHex = "a6a6a6"
-                });
-            }
-            rowIndex++;
+            Name = XlsxWriter.SanitizeSheetName(table.SheetName),
+            PreserveOversizedText = table.PreserveOversizedText,
+            RowSource = new XlsxRows(table, rowCount, rowAt)
+        };
+
+        // A column with no explicit width is left out of ColumnWidths so the writer
+        // sizes it from content, standing in for ClosedXML's AdjustToContents().
+        for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
+        {
+            if (table.Columns[colIndex].Width is double width)
+                sheet.ColumnWidths[colIndex] = ConvertPixelsToExcelColumnWidth(width);
         }
 
-        foreach (var row in table.Rows)
+        return XlsxWriter.Write(sheet);
+    }
+
+    /// <summary>The table's XLSX cells, built one row at a time into one reused row.</summary>
+    private sealed class XlsxRows(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt) : XlsxRowSource
+    {
+        private readonly IReadOnlyDictionary<string, int> _formulaFields = BuildFormulaFieldMap(table.Columns);
+        private readonly bool _header = table.IncludeHeaderRow && table.Columns.Count > 0;
+        private readonly List<XlsxCell> _row = new();
+        private readonly List<XlsxCell> _cells = new();
+
+        public override int Count => rowCount + (_header ? 1 : 0);
+
+        public override List<XlsxCell> Row(int index)
         {
-            var line = sheet.AddRow();
+            _row.Clear();
+            if (_header && index == 0)
+            {
+                foreach (var column in table.Columns)
+                {
+                    var header = NextCell();
+                    header.Value = column.Header;
+                    header.Bold = true;
+                    header.FillHex = "eeeeee";
+                    header.BorderHex = "a6a6a6";
+                }
+                return _row;
+            }
+
+            // Sheet row number of this record, for same-row formula references.
+            var rowIndex = index + 1;
+            var row = rowAt(_header ? index - 1 : index);
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
                 var value = colIndex < row.XlsxValues.Count
@@ -299,18 +347,33 @@ public static class GridExporter
                         ? row.Values[colIndex]
                         : null;
 
-                var cell = new XlsxCell
-                {
-                    Bold = row.IsBold,
-                    FillHex = table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null,
-                    BorderHex = "e6e6e6"
-                };
+                var cellStyle = colIndex < row.CellStyles.Count ? row.CellStyles[colIndex] : null;
+                var bold = cellStyle?.Bold ?? row.IsBold;
+                var italic = cellStyle?.Italic ?? row.IsItalic;
+                var strikethrough = cellStyle?.Strikethrough ?? row.IsStrikethrough;
+                var foreColorHex = NormalizeExportColorHex(
+                    cellStyle?.ForeColorHex ?? row.ForeColorHex,
+                    ignoreWhite: false,
+                    ignoreBlack: true);
+                var backColorHex = NormalizeExportColorHex(
+                        cellStyle?.BackColorHex ?? row.BackColorHex,
+                        ignoreWhite: true,
+                        ignoreBlack: false)
+                    ?? (table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null);
+
+                var cell = NextCell();
+                cell.Bold = bold;
+                cell.Italic = italic;
+                cell.Strikethrough = strikethrough;
+                cell.FontColorHex = foreColorHex;
+                cell.FillHex = backColorHex;
+                cell.BorderHex = "e6e6e6";
 
                 if (row.UseColumnFormulas
                     && colIndex < table.Columns.Count
                     && TryTranslateSameRowFormula(
                         table.Columns,
-                        formulaFields,
+                        _formulaFields,
                         colIndex,
                         rowIndex,
                         out var formula))
@@ -336,21 +399,41 @@ public static class GridExporter
                         _ => XlsxAlign.Left
                     };
                 }
-
-                line.Add(cell);
             }
-            rowIndex++;
+            return _row;
         }
 
-        // A column with no explicit width is left out of ColumnWidths so the writer
-        // sizes it from content, standing in for ClosedXML's AdjustToContents().
-        for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
+        // The row's next cell, reset to a new cell's defaults.
+        private XlsxCell NextCell()
         {
-            if (table.Columns[colIndex].Width is double width)
-                sheet.ColumnWidths[colIndex] = ConvertPixelsToExcelColumnWidth(width);
+            if (_row.Count == _cells.Count)
+                _cells.Add(new XlsxCell());
+            var cell = _cells[_row.Count];
+            cell.Reset();
+            _row.Add(cell);
+            return cell;
         }
+    }
 
-        return XlsxWriter.Write(sheet);
+    private static string? NormalizeExportColorHex(string? hex, bool ignoreWhite, bool ignoreBlack)
+    {
+        if (string.IsNullOrWhiteSpace(hex))
+            return null;
+
+        var trimmed = hex.Trim().TrimStart('#');
+        if (trimmed.Length == 3 && trimmed.All(Uri.IsHexDigit))
+            trimmed = string.Concat(trimmed[0], trimmed[0], trimmed[1], trimmed[1], trimmed[2], trimmed[2]);
+
+        if (trimmed.Length != 6 || !trimmed.All(Uri.IsHexDigit))
+            return null;
+
+        var upper = trimmed.ToUpperInvariant();
+        if (ignoreWhite && upper == "FFFFFF")
+            return null;
+        if (ignoreBlack && upper == "000000")
+            return null;
+
+        return upper;
     }
 
     private static double ConvertPixelsToExcelColumnWidth(double width)
@@ -845,11 +928,38 @@ public static class GridExporter
             sb.Append(row.IsBold ? "<tr class=\"bold\">" : "<tr>");
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
-                var css = table.HighlightColumnIndexes.Contains(colIndex) ? " class=\"highlight\"" : "";
-                var align = colIndex < table.Columns.Count && table.Columns[colIndex].TextAlign != TextAlign.Left
-                    ? $" style=\"text-align:{(table.Columns[colIndex].TextAlign == TextAlign.Right ? "right" : "center")}\""
-                    : "";
-                sb.Append("<td").Append(css).Append(align).Append(">")
+                var cellStyle = colIndex < row.CellStyles.Count ? row.CellStyles[colIndex] : null;
+                var bold = cellStyle?.Bold ?? row.IsBold;
+                var italic = cellStyle?.Italic ?? row.IsItalic;
+                var strikethrough = cellStyle?.Strikethrough ?? row.IsStrikethrough;
+                var foreColorHex = NormalizeExportColorHex(
+                    cellStyle?.ForeColorHex ?? row.ForeColorHex,
+                    ignoreWhite: false,
+                    ignoreBlack: true);
+                var backColorHex = NormalizeExportColorHex(
+                    cellStyle?.BackColorHex ?? row.BackColorHex,
+                    ignoreWhite: true,
+                    ignoreBlack: false);
+
+                var css = table.HighlightColumnIndexes.Contains(colIndex) && backColorHex == null ? " class=\"highlight\"" : "";
+                var styles = new List<string>(6);
+                if (colIndex < table.Columns.Count && table.Columns[colIndex].TextAlign != TextAlign.Left)
+                    styles.Add($"text-align:{(table.Columns[colIndex].TextAlign == TextAlign.Right ? "right" : "center")}");
+                if (foreColorHex != null)
+                    styles.Add($"color:#{foreColorHex}");
+                if (backColorHex != null)
+                    styles.Add($"background:#{backColorHex}");
+                if (bold && !row.IsBold)
+                    styles.Add("font-weight:bold");
+                else if (!bold && row.IsBold)
+                    styles.Add("font-weight:normal");
+                if (italic)
+                    styles.Add("font-style:italic");
+                if (strikethrough)
+                    styles.Add("text-decoration:line-through");
+
+                var styleAttr = styles.Count > 0 ? $" style=\"{string.Join(";", styles)}\"" : "";
+                sb.Append("<td").Append(css).Append(styleAttr).Append(">")
                   .Append(Html(colIndex < row.Values.Count ? ToExportString(row.Values[colIndex]) : ""))
                   .Append("</td>");
             }
@@ -903,7 +1013,7 @@ public static class GridExporter
         if (table.Columns.Count == 0)
         {
             pages.Add(string.Empty);
-            return PdfDocumentWriter.Write(pageWidth, pageHeight, pages);
+            return NativePdfDocument.WriteLegacy(pageWidth, pageHeight, pages);
         }
 
         var columnWidths = ResolvePdfColumnWidths(table, contentWidth, fontSize, effectiveColumnLayout, zoomScale);
@@ -1021,7 +1131,7 @@ public static class GridExporter
             }
         }
 
-        return PdfDocumentWriter.Write(pageWidth, pageHeight, pages.Count > 0 ? pages : new List<string> { string.Empty });
+        return NativePdfDocument.WriteLegacy(pageWidth, pageHeight, pages.Count > 0 ? pages : new List<string> { string.Empty });
     }
 
     private static void DrawPdfRow(
@@ -1589,56 +1699,4 @@ public static class GridExporter
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal);
 
-    private static class PdfDocumentWriter
-    {
-        public static byte[] Write(double pageWidth, double pageHeight, IReadOnlyList<string> pageContents)
-        {
-            var objects = new List<string>
-            {
-                "<< /Type /Catalog /Pages 2 0 R >>",
-                "",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
-            };
-
-            var pageObjectNumbers = new List<int>();
-            foreach (var content in pageContents)
-            {
-                var contentBytes = Encoding.ASCII.GetBytes(content);
-                var pageObjectNumber = objects.Count + 1;
-                var contentObjectNumber = objects.Count + 2;
-                pageObjectNumbers.Add(pageObjectNumber);
-
-                objects.Add(
-                    $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PdfNumber(pageWidth)} {PdfNumber(pageHeight)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {contentObjectNumber} 0 R >>");
-                objects.Add($"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream");
-            }
-
-            objects[1] = $"<< /Type /Pages /Kids [{string.Join(" ", pageObjectNumbers.Select(n => $"{n} 0 R"))}] /Count {pageObjectNumbers.Count} >>";
-
-            using var stream = new MemoryStream();
-            void WriteAscii(string text)
-            {
-                var bytes = Encoding.ASCII.GetBytes(text);
-                stream.Write(bytes, 0, bytes.Length);
-            }
-
-            WriteAscii("%PDF-1.4\n");
-            var offsets = new List<long> { 0 };
-            for (var i = 0; i < objects.Count; i++)
-            {
-                offsets.Add(stream.Position);
-                WriteAscii($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
-            }
-
-            var xrefPosition = stream.Position;
-            WriteAscii($"xref\n0 {objects.Count + 1}\n");
-            WriteAscii("0000000000 65535 f \n");
-            foreach (var offset in offsets.Skip(1))
-                WriteAscii($"{offset:0000000000} 00000 n \n");
-            WriteAscii($"trailer\n<< /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xrefPosition}\n%%EOF");
-
-            return stream.ToArray();
-        }
-    }
 }

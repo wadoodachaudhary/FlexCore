@@ -3,7 +3,7 @@
 @inherits FlexControlBase
 @implements IDisposable
 @using System.Linq.Expressions
-<div class="fx-autocomplete @CssClass" style="@ResolvedStyle" aria-busy="@IsLoading" @attributes="AdditionalAttributes">
+<div class="fx-autocomplete @CssClass" style="@ResolvedStyle" aria-busy="@(IsLoading ? "true" : "false")" @attributes="AdditionalAttributes">
     <DropDownListControl @ref="_list" TItem="Suggestion" TValue="string" DataSource="@_suggestions" TextFieldName="Text" ValueFieldName="Text"
                          Value="@Value" ValueChanged="CommitAsync" TextChanged="SearchAsync" Editable="true" Enabled="@Enabled" Width="@Width" AriaLabel="@AriaLabel" Placeholder="@Placeholder">
         <ItemTemplate Context="suggestion">

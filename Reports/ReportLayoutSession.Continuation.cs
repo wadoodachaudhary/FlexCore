@@ -84,7 +84,7 @@ public sealed partial class ReportLayoutSession
     {
         var tree = TextTree(html);
         foreach (var (span, run) in tree.Elements().Zip(element.Visual.Runs))
-            span.SetAttributeValue("style", ReportObjectRenderer.FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color));
+            span.SetAttributeValue("style", ReportObjectRenderer.FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, element.UseCrystalScreenMetrics, ReportObjectRenderer.TextDpi(element)));
         return string.Concat(tree.Nodes().Select(n => n.ToString(SaveOptions.DisableFormatting)));
     }
 
@@ -136,6 +136,20 @@ public sealed partial class ReportLayoutSession
                 if (metric.Lines.Any(l => l.Start < 0 || l.End > oldText.Length))
                     throw new InvalidDataException("Text continuation received invalid or missing character offsets.");
                 var consumed = metric.Lines.Where(l => l.Bottom <= offset - item.Element.TopTwips).Select(l => l.End).DefaultIfEmpty(0).Max();
+                if (ReportObjectRenderer.TextLineLimit(item.Element) is > 0 and var limit)
+                {
+                    var printedLines = metric.Lines.Count(l => l.Bottom <= offset - item.Element.TopTwips);
+                    if (printedLines >= limit)
+                    {
+                        // A fixed minimum box can outlast its allowed text. Do not
+                        // restart a fresh line allowance on the following page.
+                        element.IsSuppressed = true; element.TopTwips = offset;
+                        items.Add(next with { OmittedContinuation = true });
+                        shifts.Add((oldBottom, offset - oldBottom, item));
+                        continue;
+                    }
+                    element.MaxNumberOfLines = limit - printedLines;
+                }
                 var prefix = (item.ConsumedText ?? "") + oldText[..consumed];
                 var tree = TextTree(next.Html);
                 var remaining = prefix.Length;

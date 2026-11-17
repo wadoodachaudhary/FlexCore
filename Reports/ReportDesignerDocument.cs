@@ -15,6 +15,11 @@ public sealed class ReportDesignerDocument
     /// <summary>Report summary comments and author (Crystal's ReportComments / FileAuthor special fields).</summary>
     public string Comments { get; set; } = "";
     public string Author { get; set; } = "";
+    /// <summary>The report file's own path (Crystal's File Path and Name) and the UTC time stamps saved with it; the modification date Crystal
+    /// prints is <see cref="Created"/>, which its designer rewrites on every save. Blank or null when the source carries none.</summary>
+    public string ReportFilePath { get; set; } = "";
+    public DateTime? Created { get; set; }
+    public DateTime? LastSaved { get; set; }
     public string SourceName { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public ReportDesignerPage Page { get; set; } = new();
@@ -367,7 +372,7 @@ public sealed class ReportDesignerDocument
             LeftField = link.LeftField,
             RightTable = link.RightTable,
             RightField = link.RightField,
-            JoinType = link.JoinType
+            JoinType = link.JoinType, Comparison = link.Comparison
         };
     }
 }
@@ -382,11 +387,16 @@ public sealed class ReportDesignerPage
     public int MarginTopTwips { get; set; } = 720;
     public int MarginRightTwips { get; set; } = 720;
     public int MarginBottomTwips { get; set; } = 720;
+    /// <summary>Crystal "No Printer": the report's text objects and growing fields are laid out at 96-dpi screen metrics.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoPrinter { get; set; }
 }
 
 public sealed class ReportDesignerSection
 {
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    private string? _id;
+    /// <summary>A fresh id unless one is assigned; generated on first read, so copies that take the source's id pay for none.</summary>
+    public string Id { get => _id ??= Guid.NewGuid().ToString("N"); set => _id = value; }
     public string SourceKey { get; set; } = "";
     public string Name { get; set; } = "Section";
     public string Kind { get; set; } = "Detail";
@@ -411,15 +421,24 @@ public sealed class ReportDesignerSection
 
 public sealed class ReportDesignerElement
 {
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public ReportDesignerElement() : this(new ReportObjectVisual(), new ReportDesignerHighlightRule()) { }
+    // Clones bring their own visual and rule; the default constructor would otherwise build two that are thrown away.
+    private ReportDesignerElement(ReportObjectVisual visual, ReportDesignerHighlightRule highlightRule) { Visual = visual; HighlightRule = highlightRule; }
+    private string? _id;
+    /// <summary>A fresh id unless one is assigned; generated on first read, so copies that take the source's id pay for none.</summary>
+    public string Id { get => _id ??= Guid.NewGuid().ToString("N"); set => _id = value; }
     public string SourceKey { get; set; } = "";
     public string SectionId { get; set; } = "";
     public string Name { get; set; } = "Object";
+    public string LineEndSection { get; set; } = "";
+    public int LineEndTop { get; set; }
     public string Kind { get; set; } = "Text";
     public string Text { get; set; } = "";
     public string Binding { get; set; } = "";
     public string SubreportName { get; set; } = "";
     public string SubreportXmlPath { get; set; } = "";
+    /// <summary>Crystal's "Subreport Preview Tab" caption, when the Format Editor's formula set one.</summary>
+    public string SubreportTabText { get; set; } = "";
     public int LeftTwips { get; set; }
     public int TopTwips { get; set; }
     public int WidthTwips { get; set; } = 1440;
@@ -432,15 +451,56 @@ public sealed class ReportDesignerElement
     public string TextColor { get; set; } = "#000000";
     public string BackgroundColor { get; set; } = "transparent";
     public string HorizontalAlignment { get; set; } = "Default";
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int TextRotation { get; set; }
+    internal bool HasRotatedText => TextRotation is 90 or 270 && Kind is "Text" or "Field" or "FieldHeading";
+
+    // The printed box stays on the page. Line layout uses its perpendicular dimension.
+    internal ReportDesignerElement TextLayoutFrame()
+    {
+        if (!HasRotatedText) return this;
+        var frame = (ReportDesignerElement)MemberwiseClone();
+        frame.TextRotation = 0;
+        (frame.WidthTwips, frame.HeightTwips) = (HeightTwips, WidthTwips);
+        frame.Visual = Visual.Clone();
+        var v = frame.Visual;
+        (v.LeftLine, v.TopLine, v.RightLine, v.BottomLine) = TextRotation == 90
+            ? (Visual.BottomLine, Visual.LeftLine, Visual.TopLine, Visual.RightLine)
+            : (Visual.TopLine, Visual.RightLine, Visual.BottomLine, Visual.LeftLine);
+        return frame;
+    }
     public bool IsSuppressed { get; set; }
     public bool CanGrow { get; set; }
+    /// <summary>Authored maximum text lines when growing; zero means unlimited.</summary>
+    public bool InterpretHtml { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool InterpretRtf { get; set; }
+    public int MaxNumberOfLines { get; set; }
+    /// <summary>Hide consecutive equal field values in printed sections, preserving their space and underlying data.</summary>
+    public bool SuppressIfDuplicate { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool SuppressEmbeddedFieldBlankLines { get; set; }
     public string FormatString { get; set; } = "";
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
+    public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
+    /// <summary>Use integral 96-DPI em heights for converted Crystal screen layouts, without changing authored point sizes.</summary>
+    public bool UseCrystalScreenMetrics { get; set; }
+    /// <summary>The report was authored with no printer: text objects and growing fields lay out at 96-dpi screen metrics.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoPrinterLayout { get; set; }
     public bool LockFormat { get; set; }
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
-    public ReportDesignerHighlightRule HighlightRule { get; set; } = new();
-    public ReportObjectVisual Visual { get; set; } = new();
+    public ReportDesignerHighlightRule HighlightRule { get; set; }
+    public ReportObjectVisual Visual { get; set; }
     public ReportAnalysisDefinition? Analysis { get; set; }
+    /// <summary>A label-only chart's stamp (see <see cref="ReportChartMarker"/>); null for every other object. A chart
+    /// that has data bindings (<see cref="Analysis"/>) prints as that chart in the viewer and both exports, so it has no
+    /// stamp: Crystal's Chart Expert replaces the label-only drawing the same way.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public ReportChartMarker? ChartMarker { get => Analysis is null ? _chartMarker : null; set => _chartMarker = value; }
+    private ReportChartMarker? _chartMarker;
 
     public string DisplayText
     {
@@ -458,10 +518,10 @@ public sealed class ReportDesignerElement
 
     public ReportDesignerElement CloneFor(string sectionId, string name)
     {
-        return new ReportDesignerElement
+        return new ReportDesignerElement(Visual.Clone(), HighlightRule.Clone())
         {
-            Id = Guid.NewGuid().ToString("N"),
             SourceKey = SourceKey,
+            LineEndSection = LineEndSection, LineEndTop = LineEndTop,
             SectionId = sectionId,
             Name = name,
             Kind = Kind,
@@ -469,6 +529,7 @@ public sealed class ReportDesignerElement
             Binding = Binding,
             SubreportName = SubreportName,
             SubreportXmlPath = SubreportXmlPath,
+            SubreportTabText = SubreportTabText,
             LeftTwips = LeftTwips + ReportDesignerMetrics.PixelsToTwips(12),
             TopTwips = TopTwips + ReportDesignerMetrics.PixelsToTwips(12),
             WidthTwips = WidthTwips,
@@ -481,15 +542,25 @@ public sealed class ReportDesignerElement
             TextColor = TextColor,
             BackgroundColor = BackgroundColor,
             HorizontalAlignment = HorizontalAlignment,
+            TextRotation = TextRotation,
             IsSuppressed = IsSuppressed,
             CanGrow = CanGrow,
+            InterpretHtml = InterpretHtml,
+            InterpretRtf = InterpretRtf,
+            MaxNumberOfLines = MaxNumberOfLines,
+            SuppressIfDuplicate = SuppressIfDuplicate,
+            SuppressEmbeddedFieldBlankLines = SuppressEmbeddedFieldBlankLines,
             FormatString = FormatString,
+            NativeDateTimeFormat = NativeDateTimeFormat,
+            NativeNumberFormat = NativeNumberFormat,
+            NativeNumericFormat = NativeNumericFormat,
+            UseCrystalScreenMetrics = UseCrystalScreenMetrics,
+            NoPrinterLayout = NoPrinterLayout,
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
-            Visual = Visual.Clone(),
             Analysis = Analysis?.Clone(),
-            HighlightRule = HighlightRule.Clone()
+            ChartMarker = ChartMarker
         };
     }
 }
@@ -542,6 +613,8 @@ public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Schema { get; set; } = "";
+    /// <summary>Whether this catalog object is a view rather than a table.</summary>
+    public bool IsView { get; set; }
     public string SourceName { get; set; } = "";
     public string CommandText { get; set; } = "";
     public List<ReportDesignerField> Fields { get; set; } = new();
@@ -622,10 +695,11 @@ public sealed class ReportDesignerDataLink : ReportDesignerSourceItem
     public string RightTable { get; set; } = "";
     public string RightField { get; set; } = "";
     public string JoinType { get; set; } = "Inner";
+    public string Comparison { get; set; } = "=";
 
     public string DisplayName => string.IsNullOrWhiteSpace(LeftTable) && string.IsNullOrWhiteSpace(RightTable)
         ? "New link"
-        : $"{LeftTable}.{LeftField} = {RightTable}.{RightField}";
+        : $"{LeftTable}.{LeftField} {Comparison} {RightTable}.{RightField}";
 }
 
 public sealed class ReportDesignerElementSelection
@@ -660,7 +734,7 @@ public static partial class ReportDesignerXmlSerializer
     public static ReportDesignerDocument FromFile(string xmlFilePath)
     {
         if (!File.Exists(xmlFilePath))
-            throw new FileNotFoundException($"Report XML not found: {xmlFilePath}", xmlFilePath);
+            throw new FileNotFoundException($"Report RDL not found: {xmlFilePath}", xmlFilePath);
 
         return FromXml(File.ReadAllText(xmlFilePath), Path.GetFileName(xmlFilePath), xmlFilePath);
     }
@@ -668,10 +742,10 @@ public static partial class ReportDesignerXmlSerializer
     public static ReportDesignerDocument FromXml(string xml, string? sourceName = null, string? sourcePath = null)
     {
         if (string.IsNullOrWhiteSpace(xml))
-            throw new InvalidDataException("The report XML is empty.");
+            throw new InvalidDataException("The report RDL is empty.");
 
         var sourceDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-        var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report XML: missing root element.");
+        var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report RDL: missing root element.");
         var reportDefinition = Child(root, "ReportDefinition");
         if (root.Name != "Report" || reportDefinition is null || Child(reportDefinition, "Areas") is null)
             throw new InvalidDataException("Expected a Crystal Report containing ReportDefinition/Areas.");
@@ -684,6 +758,9 @@ public static partial class ReportDesignerXmlSerializer
             Title = GetReportTitle(root, sourceName),
             Comments = Attribute(Child(root, "Summaryinfo"), "ReportComments") ?? "",
             Author = Attribute(Child(root, "Summaryinfo"), "ReportAuthor") ?? "",
+            ReportFilePath = Attribute(root, "FileName") ?? "",
+            Created = FileTime(Attribute(Child(root, "Summaryinfo"), "FileCreated")),
+            LastSaved = FileTime(Attribute(Child(root, "Summaryinfo"), "FileLastSaved")),
             Page = ParsePage(root)
         };
 
@@ -718,18 +795,26 @@ public static partial class ReportDesignerXmlSerializer
         return SerializePreservingSource(document).ToString(SaveOptions.None);
     }
 
+    private static DateTime? FileTime(string? text)
+        => DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var time) ? time.Kind == DateTimeKind.Local ? time.ToUniversalTime() : time : null;
+
     private static XDocument BuildSourceDocument(ReportDesignerDocument document)
     {
         var root = new XElement("Report",
             new XAttribute("Name", string.IsNullOrWhiteSpace(document.Title) ? "Untitled Report" : document.Title),
             new XAttribute("HasSavedData", "False"));
 
-        root.Add(new XElement("Summaryinfo", new XAttribute("ReportTitle", document.Title ?? "")));
+        var summary = new XElement("Summaryinfo", new XAttribute("ReportTitle", document.Title ?? ""));
+        if (document.Created is { } created) summary.SetAttributeValue("FileCreated", created.ToString("o", CultureInfo.InvariantCulture));
+        if (document.LastSaved is { } saved) summary.SetAttributeValue("FileLastSaved", saved.ToString("o", CultureInfo.InvariantCulture));
+        root.Add(summary);
+        root.Add(NewReportOptions());
         root.Add(new XElement("PrintOptions",
             new XAttribute("PageContentHeight", document.Page.ContentHeightTwips),
             new XAttribute("PageContentWidth", document.Page.ContentWidthTwips),
             new XAttribute("PaperOrientation", document.Page.Orientation),
             new XAttribute("PaperSize", document.Page.PaperSize),
+            document.Page.NoPrinter ? new XAttribute("FlexKitNoPrinter", "true") : null,
             new XElement("PageMargins",
                 new XAttribute("bottomMargin", document.Page.MarginBottomTwips),
                 new XAttribute("leftMargin", document.Page.MarginLeftTwips),
@@ -797,10 +882,11 @@ public static partial class ReportDesignerXmlSerializer
                     !string.IsNullOrWhiteSpace(link.LeftField) &&
                     !string.IsNullOrWhiteSpace(link.RightTable) &&
                     !string.IsNullOrWhiteSpace(link.RightField))
-                .GroupBy(link => (link.LeftTable, link.RightTable, link.JoinType))
+                .GroupBy(link => (link.LeftTable, link.RightTable, link.JoinType, link.Comparison))
                 .Select(links =>
                     new XElement("TableLink",
                         new XAttribute("JoinType", ToCrystalJoinType(links.Key.JoinType)),
+                        links.Key.Comparison == "=" ? null : new XAttribute("Comparison", links.Key.Comparison),
                         new XElement("SourceFields", links.Select(link => BuildLinkField(link.LeftTable, link.LeftField))),
                         new XElement("DestinationFields", links.Select(link => BuildLinkField(link.RightTable, link.RightField))))));
     }
@@ -850,6 +936,7 @@ public static partial class ReportDesignerXmlSerializer
         printOptions.SetAttributeValue("PageContentWidth", page.ContentWidthTwips);
         printOptions.SetAttributeValue("PaperOrientation", page.Orientation);
         printOptions.SetAttributeValue("PaperSize", page.PaperSize);
+        printOptions.SetAttributeValue("FlexKitNoPrinter", page.NoPrinter ? "true" : null);
 
         var margins = Child(printOptions, "PageMargins") ?? EnsureChild(printOptions, "PageMargins");
         margins.SetAttributeValue("bottomMargin", page.MarginBottomTwips);
@@ -862,6 +949,8 @@ public static partial class ReportDesignerXmlSerializer
     {
         objectElement.Element("FlexKitAnalysis")?.Remove();
         if (element.Analysis is not null) objectElement.Add(element.Analysis.ToXml());
+        objectElement.Element("FlexKitChartMarker")?.Remove();
+        if (element.ChartMarker is not null) objectElement.Add(element.ChartMarker.ToXml());
         ReportObjectVisual.Write(element.Visual, objectElement);
         objectElement.SetAttributeValue("Name", string.IsNullOrWhiteSpace(element.Name) ? element.Kind : element.Name);
         objectElement.SetAttributeValue("Kind", string.IsNullOrWhiteSpace(element.Kind) ? InferKindFromObjectElement(objectElement) : element.Kind);
@@ -869,6 +958,16 @@ public static partial class ReportDesignerXmlSerializer
         objectElement.SetAttributeValue("Left", element.LeftTwips);
         objectElement.SetAttributeValue("Width", element.WidthTwips);
         objectElement.SetAttributeValue("Height", element.HeightTwips);
+
+        if (element.Kind == "Field") objectElement.SetAttributeValue("TextInterpretation", element.InterpretRtf ? "Rtf" : element.InterpretHtml ? "Html" : null);
+        if (element.MaxNumberOfLines < 0)
+            throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
+        if (objectElement.Name.LocalName is "FieldObject" or "TextObject" or "FieldHeadingObject")
+            objectElement.SetAttributeValue("MaxNumberOfLines", element.MaxNumberOfLines);
+        if (objectElement.Name.LocalName == "FieldObject")
+            objectElement.SetAttributeValue("SuppressIfDuplicate", element.SuppressIfDuplicate);
+        if (objectElement.Name.LocalName is "TextObject" or "FieldHeadingObject")
+            objectElement.SetAttributeValue("SuppressEmbeddedFieldBlankLines", element.SuppressEmbeddedFieldBlankLines);
 
         var kind = element.Kind.Trim();
         if (string.Equals(kind, "Text", StringComparison.OrdinalIgnoreCase))
@@ -910,8 +1009,16 @@ public static partial class ReportDesignerXmlSerializer
         objectFormat.SetAttributeValue("EnableCanGrow", Lower(element.CanGrow));
         objectFormat.SetAttributeValue("EnableCloseAtPageBreak", Lower(element.Visual.CloseAtPageBreak));
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
+        objectFormat.SetAttributeValue("TextRotation", element.TextRotation == 0 ? null : element.TextRotation);
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
         objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
+        objectFormat.SetAttributeValue("FlexKitCrystalScreenMetrics", Lower(element.UseCrystalScreenMetrics));
+        objectElement.Elements("FlexKitNativeDateTimeFormat").Remove();
+        if (element.NativeDateTimeFormat is { } nativeDateTime) objectElement.Add(nativeDateTime.ToXml());
+        objectElement.Elements("FlexKitNativeNumberFormat").Remove();
+        if (element.NativeNumberFormat is { } nativeNumber) objectElement.Add(nativeNumber.ToXml());
+        objectElement.Elements("FlexKitNativeNumericFormat").Remove();
+        if (element.NativeNumericFormat is { } nativeNumeric) objectElement.Add(nativeNumeric.ToXml());
         objectFormat.SetAttributeValue("FlexKitLockFormat", Lower(element.LockFormat));
         objectFormat.SetAttributeValue("FlexKitLockSizePosition", Lower(element.LockSizePosition));
         objectFormat.SetAttributeValue("FlexKitIndentTwips", element.IndentTwips);
@@ -985,6 +1092,7 @@ public static partial class ReportDesignerXmlSerializer
             var kind when string.Equals(kind, "Box", StringComparison.OrdinalIgnoreCase) => "BoxObject",
             var kind when string.Equals(kind, "Line", StringComparison.OrdinalIgnoreCase) => "LineObject",
             var kind when string.Equals(kind, "Picture", StringComparison.OrdinalIgnoreCase) => "PictureObject",
+            "Map" => "MapObject",
             "Chart" => "ChartObject",
             "CrossTab" => "CrossTabObject",
             "Table" => "TableObject",
@@ -1023,6 +1131,7 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("EnableCloseAtPageBreak", "true"),
             new XAttribute("EnableKeepTogether", "true"),
             new XAttribute("EnableSuppress", Lower(element.IsSuppressed)),
+            element.TextRotation == 0 ? null : new XAttribute("TextRotation", element.TextRotation),
             new XAttribute("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment)));
         objectElement.Add(new XElement("ObjectFormatConditionFormulas"));
         return objectElement;
@@ -1097,6 +1206,8 @@ public static partial class ReportDesignerXmlSerializer
                 LeftTwips = ParseInt(Attribute(objectElement, "Left")),
                 TopTwips = ParseInt(Attribute(objectElement, "Top")),
                 WidthTwips = ParseInt(Attribute(objectElement, "Width"), 1440),
+                LineEndSection = Attribute(objectElement, "LineEndSection") ?? "",
+                LineEndTop = ParseInt(Attribute(objectElement, "LineEndTop")),
                 HeightTwips = ParseInt(Attribute(objectElement, "Height"), 240),
                 FontFamily = Attribute(font, "FontFamily") ?? Attribute(font, "Name") ?? "Arial",
                 FontSize = ParseDecimal(Attribute(font, "SizeinPoints") ?? Attribute(font, "Size"), 10m),
@@ -1106,9 +1217,21 @@ public static partial class ReportDesignerXmlSerializer
                 TextColor = ColorFromElement(Child(objectElement, "Color"), "#000000"),
                 BackgroundColor = ColorFromElement(Child(Child(objectElement, "Border"), "BackgroundColor"), "transparent"),
                 HorizontalAlignment = Attribute(objectFormat, "HorizontalAlignment") ?? "Default",
+                TextRotation = ParseInt(Attribute(objectFormat, "TextRotation")),
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
+                InterpretHtml = Attribute(objectElement, "TextInterpretation") == "Html",
+                InterpretRtf = Attribute(objectElement, "TextInterpretation") == "Rtf",
+                MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
+                SuppressIfDuplicate = ParseBool(Attribute(objectElement, "SuppressIfDuplicate")),
+                SuppressEmbeddedFieldBlankLines = ParseBool(Attribute(objectElement, "SuppressEmbeddedFieldBlankLines")),
                 FormatString = Attribute(objectFormat, "FlexKitFormatString") ?? "",
+                NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(objectElement),
+                NativeNumberFormat = ReportNativeNumberFormat.Read(objectElement),
+                NativeNumericFormat = ReportNativeNumericFormat.Read(objectElement),
+                UseCrystalScreenMetrics = ParseBool(Attribute(objectFormat, "FlexKitCrystalScreenMetrics"),
+                    document.SourceDocument?.Root?.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null),
+                NoPrinterLayout = document.Page.NoPrinter,
                 LockFormat = ParseBool(Attribute(objectFormat, "FlexKitLockFormat")),
                 LockSizePosition = ParseBool(Attribute(objectFormat, "FlexKitLockSizePosition")),
                 IndentTwips = ParseInt(Attribute(objectFormat, "FlexKitIndentTwips")),
@@ -1120,6 +1243,7 @@ public static partial class ReportDesignerXmlSerializer
 
             element.Visual = ReportObjectVisual.Read(objectElement);
             element.Analysis = ReportAnalysisDefinition.Read(objectElement);
+            element.ChartMarker = ReportChartMarker.Read(objectElement);
             document.SourceObjects[element.SourceKey] = objectElement;
             section.Elements.Add(element);
         }
@@ -1192,6 +1316,7 @@ public static partial class ReportDesignerXmlSerializer
                     LeftField = source.Field,
                     RightTable = destination.Table,
                     RightField = destination.Field,
+                    Comparison = CrystalXmlReportLoader.ReadLinkComparison(Attribute(tableLink, "Comparison")),
                     JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType"))
                 };
                 document.Links.Add(link);
@@ -1207,6 +1332,7 @@ public static partial class ReportDesignerXmlSerializer
                 LeftField = Attribute(link, "LeftField") ?? "",
                 RightTable = Attribute(link, "RightTable") ?? "",
                 RightField = Attribute(link, "RightField") ?? "",
+                Comparison = CrystalXmlReportLoader.ReadLinkComparison(Attribute(link, "Comparison")),
                 JoinType = Attribute(link, "JoinType") ?? "Inner"
             };
 
@@ -1233,6 +1359,13 @@ public static partial class ReportDesignerXmlSerializer
     {
         var metadata = Child(root, MetadataElementName);
         document.CustomSql = Attribute(metadata?.Element("Sql"), "Query") ?? "";
+        foreach (var field in metadata?.Element("Sql")?.Element("ResultFields")?.Elements("Field") ?? [])
+            document.Fields.Add(new ReportDesignerField
+            {
+                Name = (string?)field.Attribute("Name") ?? "",
+                LongName = (string?)field.Attribute("Name") ?? "",
+                Type = (string?)field.Attribute("Type") ?? "String"
+            });
     }
 
     private static (string Table, string Field)? ParseCrystalFieldReference(string formulaName)
@@ -1253,6 +1386,7 @@ public static partial class ReportDesignerXmlSerializer
                string.Equals(left.LeftField, right.LeftField, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(left.RightTable, right.RightTable, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(left.RightField, right.RightField, StringComparison.OrdinalIgnoreCase) &&
+               left.Comparison == right.Comparison &&
                string.Equals(left.JoinType, right.JoinType, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1382,8 +1516,16 @@ public static partial class ReportDesignerXmlSerializer
             return new ReportDesignerField();
 
         var cleaned = fieldName.Trim().Trim('{', '}');
-        if (cleaned.StartsWith("@", StringComparison.Ordinal))
+        var formulaReference = cleaned.StartsWith("@", StringComparison.Ordinal);
+        if (formulaReference)
             cleaned = cleaned[1..];
+
+        // "{@ItemNumber}" names the formula, never a database column that happens to share its name:
+        // a report may sort on val({Items.ItemNumber}), and the text column would sort "0002" before "001".
+        if (formulaReference && document.Fields.FirstOrDefault(candidate => candidate.IsFormula
+                && (string.Equals(candidate.Name.TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(candidate.Formula.Trim('{', '}').TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase))) is { } formula)
+            return formula;
 
         return document.Fields.FirstOrDefault(candidate =>
                    string.Equals(candidate.DisplayName, cleaned, StringComparison.OrdinalIgnoreCase) ||
@@ -1414,6 +1556,7 @@ public static partial class ReportDesignerXmlSerializer
         {
             Orientation = Attribute(printOptions, "PaperOrientation") ?? "Portrait",
             PaperSize = Attribute(printOptions, "PaperSize") ?? "PaperLetter",
+            NoPrinter = ParseBool(Attribute(printOptions, "FlexKitNoPrinter")),
             ContentWidthTwips = ParseInt(Attribute(printOptions, "PageContentWidth"), 11520),
             ContentHeightTwips = ParseInt(Attribute(printOptions, "PageContentHeight"), 15120),
             MarginLeftTwips = ParseInt(Attribute(margins, "leftMargin"), 720),
@@ -1444,19 +1587,25 @@ public static partial class ReportDesignerXmlSerializer
         var kind = Attribute(objectElement, "Kind");
         if (ReportObjectCapabilities.UnsupportedCrystalKind(kind, objectElement.Name.LocalName) is { } unsupportedKind)
             return unsupportedKind;
+        // Crystal's SDK export writes the object class as its kind ("FieldObject", "SubreportObject"); the designer and the
+        // positioned runtime name the kind alone ("Field", "Subreport"), as the native converter writes it.
         if (!string.IsNullOrWhiteSpace(kind))
-            return kind!;
+            return KindFromObjectClass(kind!) ?? kind!;
 
-        return objectElement.Name.LocalName switch
-        {
-            "TextObject" => "Text",
-            "FieldHeadingObject" => "FieldHeading",
-            "SubreportObject" => "Subreport",
-            "BoxObject" => "Box",
-            "LineObject" => "Line",
-            _ => "Field"
-        };
+        return KindFromObjectClass(objectElement.Name.LocalName) ?? "Field";
     }
+
+    private static string? KindFromObjectClass(string objectClass) => objectClass switch
+    {
+        "TextObject" => "Text",
+        "FieldHeadingObject" => "FieldHeading",
+        "SubreportObject" => "Subreport",
+        "BoxObject" => "Box",
+        "LineObject" => "Line",
+        "PictureObject" => "Picture",
+        "FieldObject" => "Field",
+        _ => null
+    };
 
     private static bool IsReportObjectElement(XElement element)
     {
@@ -1487,6 +1636,14 @@ public static partial class ReportDesignerXmlSerializer
     private static int ParseInt(string? value, int fallback = 0)
     {
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+    }
+
+    private static int ParseMaxNumberOfLines(string? value)
+    {
+        if (value is null) return 0;
+        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0)
+            return parsed;
+        throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
     }
 
     private static decimal ParseDecimal(string? value, decimal fallback = 0m)

@@ -1,0 +1,192 @@
+using System.Globalization;
+using System.Xml.Linq;
+
+namespace Fx.ControlKit.Reports;
+
+/// <summary>Authored Crystal numeric properties, applied only to display; values used by formulas and summaries stay unchanged.</summary>
+public sealed record ReportNativeNumericFormat(
+    bool SuppressIfZero, int NegativeType, bool ThousandsSeparators, bool LeadingZero, int DecimalPlaces,
+    int RoundingType, int CurrencySymbolType, bool OneCurrencySymbolPerPage, int CurrencyPosition,
+    string ThousandSymbol, string DecimalSymbol, string CurrencySymbol, bool AllowFieldClipping,
+    bool AccountingFormat, bool ReverseSign, string ZeroValue, bool SuppressIfNoHorizontalPages, string Prefix, string Suffix,
+    bool HasConditionalFormatting = false, bool SystemDefaultFormatting = false, bool SuppressIfDuplicate = false,
+    string NativeArchive = "", int ValueType = 6)
+{
+    internal int SymbolFormulaIndex { get; init; } = -1;
+    internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric formatting is not implemented"
+        : AccountingFormat ? "accounting numeric layout is not implemented"
+        : OneCurrencySymbolPerPage && CurrencySymbolType != 0 ? "one-currency-symbol-per-page layout is not implemented"
+        : SuppressIfNoHorizontalPages ? "horizontal-page numeric suppression is not implemented"
+        : DecimalPlaces is < 0 or > 10 || RoundingType is < 0 or > 17 ? "the saved numeric precision is unsupported"
+        : NegativeType is < 0 or > 3 ? "the saved negative-number style is unsupported"
+        : CurrencySymbolType is not (0 or 2) ? "fixed-position currency symbols are not implemented"
+        : CurrencyPosition is < 0 or > 3 ? "the saved currency position is unsupported"
+        : string.IsNullOrEmpty(DecimalSymbol) ? "an empty decimal separator is unsupported"
+        : null;
+
+    internal string Format(object value)
+    {
+        if (UnsupportedReason is { } reason) throw new NotSupportedException("Native numeric format: " + reason + ".");
+        if (Convert.ToDecimal(value, CultureInfo.InvariantCulture) == 0)
+        {
+            if (SuppressIfZero) return "";
+            if (ZeroValue != "<Default Format>") return ZeroValue;
+        }
+        if (SystemDefaultFormatting)
+        {
+            // Crystal SystemFieldProperties takes numeric separators/grouping/sign from the active culture,
+            // currency precision for ordinary fractional numbers, and zero decimals for integer fields.
+            // It retains authored zero suppression, leading-zero, reverse-sign and prefix/suffix preferences.
+            var system = CultureInfo.CurrentCulture.NumberFormat;
+            if (CurrencySymbolType == 2)
+            {
+                var amount = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+                if (SuppressIfZero && amount == 0) return "";
+                return Prefix + (ReverseSign ? -amount : amount).ToString("C", system) + Suffix;
+            }
+            var digits = ValueType is >= 0 and <= 5 ? 0 : system.CurrencyDecimalDigits;
+            var authoredRoundingDigits = Math.Max(0, 11 - Math.Max(1, RoundingType));
+            var effective = this with { SystemDefaultFormatting = false, DecimalPlaces = digits,
+                RoundingType = authoredRoundingDigits == DecimalPlaces || ValueType is >= 0 and <= 5
+                    ? 11 - digits : Math.Max(RoundingType, 11 - digits),
+                ThousandsSeparators = system.NumberGroupSizes.FirstOrDefault() != 0,
+                ThousandSymbol = system.NumberGroupSeparator, DecimalSymbol = system.NumberDecimalSeparator,
+                NegativeType = EffectiveNegativeType,
+                ZeroValue = "<Default Format>" };
+            return effective.FormatCore(value, system.NumberGroupSizes);
+        }
+        return FormatCore(value, [3]);
+    }
+
+    private int EffectiveNegativeType => !SystemDefaultFormatting ? NegativeType
+        : CultureInfo.CurrentCulture.NumberFormat.NumberNegativePattern switch { 0 => 3, 3 or 4 => 2, _ => 1 };
+
+    // System-default numbers retain reserved sign slots in Default alignment even though
+    // they paint right-aligned. Custom numeric formats resolve Default as Right. Explicit
+    // Left/Right alignment excludes the opposite outer slot; centered fields retain both.
+    internal string OverflowProbe(string formatted, string alignment)
+    {
+        if (formatted.Length == 0 || ValueType is 1 or 3 or 5 || EffectiveNegativeType == 0) return formatted;
+        var core = formatted.AsSpan();
+        if (!core.StartsWith(Prefix, StringComparison.Ordinal) || !core.EndsWith(Suffix, StringComparison.Ordinal)
+            || core.Length < Prefix.Length + Suffix.Length) return formatted;
+        core = core.Slice(Prefix.Length, core.Length - Prefix.Length - Suffix.Length);
+        var currency = CurrencySymbolType == 0 ? "" : CurrencySymbol;
+        // Outside currency symbols surround the sign; inside symbols do not.
+        if (CurrencyPosition == 0 && core.StartsWith(currency, StringComparison.Ordinal)) core = core[currency.Length..];
+        if (CurrencyPosition == 2 && core.EndsWith(currency, StringComparison.Ordinal)) core = core[..(core.Length - currency.Length)];
+        var (leading, trailing) = EffectiveNegativeType switch
+        {
+            1 => ("-", ""), 2 => ("", "-"), 3 => ("(", ")"), _ => ("", "")
+        };
+        if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)) leading = "";
+        if (trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) trailing = "";
+        var (keepLeading, keepTrailing) = OuterSignSlots(alignment);
+        return (keepLeading ? leading : "") + formatted + (keepTrailing ? trailing : "");
+    }
+
+    // Right alignment drops the leading slot, and left alignment drops the trailing slot.
+    // When testing fit, a system-default format can reserve both.
+    private (bool Leading, bool Trailing) OuterSignSlots(string? alignment) => (alignment ?? "").ToLowerInvariant() switch
+    {
+        "right" => (false, true),
+        "default" or "" => (SystemDefaultFormatting, true),
+        "center" or "horizontalcenter" => (true, true),
+        _ => (true, false)
+    };
+
+    // Crystal paints a positive value with a blank in each sign position that its negative layout keeps at an end of
+    // the string, and aligns that padded string: "-X" and "(X)" start with a blank, "X-" and "(X)" end with one
+    // (" 330.00", " 16 "). A currency symbol next to the sign takes that end instead ("$(X)" paints "$880.00 ",
+    // "-$X" paints "$0.00"). A negative value carries its own sign and gets no blank. An outer blank the alignment
+    // hides (OuterSignSlots) is not painted.
+    internal (string Leading, string Trailing) PaintedSignSlots(string formatted, string? alignment)
+    {
+        if (formatted.Length == 0 || ValueType is 1 or 3 or 5 || EffectiveNegativeType == 0
+            || formatted.StartsWith("[Formula error", StringComparison.Ordinal)
+            || formatted.StartsWith("[Invalid summary]", StringComparison.Ordinal)
+            || formatted.StartsWith("[Unsupported", StringComparison.Ordinal)
+            || formatted.All(character => character == '#')) return ("", "");
+        var core = formatted.AsSpan();
+        if (!core.StartsWith(Prefix, StringComparison.Ordinal) || !core.EndsWith(Suffix, StringComparison.Ordinal)
+            || core.Length < Prefix.Length + Suffix.Length) return ("", "");
+        core = core.Slice(Prefix.Length, core.Length - Prefix.Length - Suffix.Length);
+        var (leading, trailing) = EffectiveNegativeType switch { 1 => ("-", ""), 2 => ("", "-"), 3 => ("(", ")"), _ => ("", "") };
+        var currency = CurrencySymbolType == 0 ? "" : CurrencySymbol;
+        var currencyLeads = currency.Length > 0 && CurrencyPosition is 0 or 1;
+        var currencyTrails = currency.Length > 0 && CurrencyPosition is 2 or 3;
+        if (currencyLeads && core.StartsWith(currency, StringComparison.Ordinal)) core = core[currency.Length..];
+        if (currencyTrails && core.EndsWith(currency, StringComparison.Ordinal)) core = core[..^currency.Length];
+        if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)
+            || trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) return ("", "");
+        // Default numeric alignment paints against the right edge. Its leading sign reservation
+        // participates in the overflow test but must not push the final digit outside that edge.
+        var paintAlignment = string.Equals(alignment, "Default", StringComparison.OrdinalIgnoreCase) ? "Right" : alignment;
+        var (keepLeading, keepTrailing) = OuterSignSlots(paintAlignment);
+        return (keepLeading && leading.Length > 0 && !currencyLeads ? " " : "",
+            keepTrailing && trailing.Length > 0 && !currencyTrails ? " " : "");
+    }
+
+    private string FormatCore(object value, int[] groupSizes)
+    {
+        var number = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+        var originalNumber = number;
+        if (SuppressIfZero && number == 0) return "";
+        // Crystal's RoundingType maps 1..11 to 10..0 fractional digits and 12..17 to tens..millions.
+        // Saved precision also limits the rounding precision. Round display only, never a bound value.
+        var roundingDigits = Math.Min(DecimalPlaces, 11 - Math.Max(1, RoundingType));
+        if (roundingDigits >= 0) number = decimal.Round(number, roundingDigits, MidpointRounding.AwayFromZero);
+        else
+        {
+            var increment = (decimal)Math.Pow(10, -roundingDigits);
+            number = decimal.Round(number / increment, 0, MidpointRounding.AwayFromZero) * increment;
+        }
+        // Crystal integer display preserves the original sign even if a coarse increment rounds it to zero.
+        var signValue = ValueType is >= 0 and <= 5 ? originalNumber : number;
+        var negative = ReverseSign ? signValue > 0 : signValue < 0;
+        var symbols = (NumberFormatInfo)CultureInfo.InvariantCulture.NumberFormat.Clone();
+        symbols.NumberDecimalSeparator = DecimalSymbol;
+        symbols.NumberGroupSeparator = ThousandSymbol;
+        symbols.NumberGroupSizes = groupSizes;
+        var text = decimal.Abs(number).ToString((ThousandsSeparators ? "N" : "F") + DecimalPlaces, symbols);
+        if (!LeadingZero && decimal.Abs(number) < 1 && DecimalPlaces > 0 && text.StartsWith("0", StringComparison.Ordinal)) text = text[1..];
+        var currency = CurrencySymbolType == 0 ? "" : CurrencySymbol;
+        string Signed(string digits) => !negative ? digits : NegativeType switch
+        {
+            1 => "-" + digits, 2 => digits + "-", 3 => "(" + digits + ")", _ => digits
+        };
+        text = CurrencyPosition switch
+        {
+            0 => currency + Signed(text), 1 => Signed(currency + text),
+            2 => Signed(text) + currency, _ => Signed(text + currency)
+        };
+        return Prefix + text + Suffix;
+    }
+
+    internal XElement ToXml() => new("FlexKitNativeNumericFormat",
+        new XAttribute("SuppressIfZero", SuppressIfZero), new XAttribute("NegativeType", NegativeType),
+        new XAttribute("ThousandsSeparators", ThousandsSeparators), new XAttribute("LeadingZero", LeadingZero),
+        new XAttribute("DecimalPlaces", DecimalPlaces), new XAttribute("RoundingType", RoundingType),
+        new XAttribute("CurrencySymbolType", CurrencySymbolType), new XAttribute("OneCurrencySymbolPerPage", OneCurrencySymbolPerPage),
+        new XAttribute("CurrencyPosition", CurrencyPosition), new XAttribute("ThousandSymbol", ThousandSymbol),
+        new XAttribute("DecimalSymbol", DecimalSymbol), new XAttribute("CurrencySymbol", CurrencySymbol),
+        new XAttribute("AllowFieldClipping", AllowFieldClipping), new XAttribute("AccountingFormat", AccountingFormat),
+        new XAttribute("ReverseSign", ReverseSign), new XAttribute("ZeroValue", ZeroValue),
+        new XAttribute("SuppressIfNoHorizontalPages", SuppressIfNoHorizontalPages), new XAttribute("Prefix", Prefix), new XAttribute("Suffix", Suffix),
+        new XAttribute("HasConditionalFormatting", HasConditionalFormatting), new XAttribute("SystemDefaultFormatting", SystemDefaultFormatting),
+        new XAttribute("SuppressIfDuplicate", SuppressIfDuplicate), new XAttribute("ValueType", ValueType), new XElement("NativeArchive", new XAttribute("Encoding", "base64"), NativeArchive));
+
+    internal static ReportNativeNumericFormat? Read(XElement parent) => parent.Element("FlexKitNativeNumericFormat") is { } xml
+        ? new((bool?)xml.Attribute("SuppressIfZero") ?? false, (int?)xml.Attribute("NegativeType") ?? -1,
+            (bool?)xml.Attribute("ThousandsSeparators") ?? false, (bool?)xml.Attribute("LeadingZero") ?? false,
+            (int?)xml.Attribute("DecimalPlaces") ?? -1, (int?)xml.Attribute("RoundingType") ?? -1,
+            (int?)xml.Attribute("CurrencySymbolType") ?? -1, (bool?)xml.Attribute("OneCurrencySymbolPerPage") ?? false,
+            (int?)xml.Attribute("CurrencyPosition") ?? -1, (string?)xml.Attribute("ThousandSymbol") ?? "",
+            (string?)xml.Attribute("DecimalSymbol") ?? "", (string?)xml.Attribute("CurrencySymbol") ?? "",
+            (bool?)xml.Attribute("AllowFieldClipping") ?? false, (bool?)xml.Attribute("AccountingFormat") ?? false,
+            (bool?)xml.Attribute("ReverseSign") ?? false, (string?)xml.Attribute("ZeroValue") ?? "",
+            (bool?)xml.Attribute("SuppressIfNoHorizontalPages") ?? false, (string?)xml.Attribute("Prefix") ?? "",
+            (string?)xml.Attribute("Suffix") ?? "", (bool?)xml.Attribute("HasConditionalFormatting") ?? false,
+            (bool?)xml.Attribute("SystemDefaultFormatting") ?? false, (bool?)xml.Attribute("SuppressIfDuplicate") ?? false,
+            xml.Element("NativeArchive")?.Value ?? "", (int?)xml.Attribute("ValueType") ?? 6) : null;
+}

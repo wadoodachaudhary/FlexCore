@@ -1,13 +1,137 @@
 using System.Xml;
+using System.Buffers.Binary;
 using System.Runtime.Versioning;
-using Fx.ControlKit.Charts;
 
 namespace Fx.ControlKit.Reports.NativeCrystal;
 
 [UnsupportedOSPlatform("browser")]
-public static class NativeCrystalRptConverter
+public static partial class NativeCrystalRptConverter
 {
+    private static ReportPlotFrame? ReadPlotFrame(ReadOnlySpan<byte> drawing, int objectId = 2028)
+    {
+        if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
+        for (var offset = 256; offset <= drawing.Length - 4;)
+        {
+            var tag = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(drawing[offset..]);
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(drawing[(offset + 2)..]);
+            offset += 4;
+            if (length > drawing.Length - offset) break;
+            var payload = drawing.Slice(offset, length);
+            offset += length;
+            // BoxInstRec / xyFrame, expressed in the chart's signed virtual coordinate space.
+            if (tag != 9006 || length != 12 || Short(payload, 2) != objectId) continue;
+            var frame = new ReportPlotFrame(.5 + Short(payload,4) / 32768d, .5 - Short(payload,6) / 32768d,
+                .5 + Short(payload,8) / 32768d, .5 - Short(payload,10) / 32768d);
+            return frame.IsValid ? frame : null;
+        }
+        return null;
+        static short Short(ReadOnlySpan<byte> p, int index) =>
+            System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(p[index..]);
+    }
+
+    private static string? ReadTitleColor(ReadOnlySpan<byte> drawing)
+    {
+        if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
+        for (var offset = 256; offset <= drawing.Length - 4;)
+        {
+            var tag = BinaryPrimitives.ReadUInt16LittleEndian(drawing[offset..]);
+            var length = BinaryPrimitives.ReadUInt16LittleEndian(drawing[(offset + 2)..]);
+            offset += 4;
+            if (length > drawing.Length - offset) break;
+            var p = drawing.Slice(offset, length);
+            offset += length;
+            // The title text's foreground paint is stored separately from its bounding box.
+            if (tag == 9001 && length == 16 && BinaryPrimitives.ReadInt16LittleEndian(p) == -1
+                && BinaryPrimitives.ReadUInt16LittleEndian(p[2..]) == 2015)
+                return $"#{p[11]:x2}{p[13]:x2}{p[15]:x2}";
+        }
+        return null;
+    }
+
+    private static ReportBarDrawing? ReadBarDrawing(ReadOnlySpan<byte> drawing, bool singleSeries)
+    {
+        if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
+        var colors = new SortedDictionary<int, string>();
+        string background = "#ffffff";
+        string? top = null, bottom = null, border = null, seriesOutline = null;
+        bool usesEffect = false;
+        int? widthPercent = null, categoryAxis = null;
+        bool? major = null, minor = null;
+        for (var offset = 256; offset <= drawing.Length - 4;)
+        {
+            var tag = BinaryPrimitives.ReadUInt16LittleEndian(drawing[offset..]);
+            var length = BinaryPrimitives.ReadUInt16LittleEndian(drawing[(offset + 2)..]);
+            offset += 4;
+            if (length > drawing.Length - offset) return null;
+            var p = drawing.Slice(offset, length);
+            offset += length;
+            if (tag == 2058 && length == 2)
+                widthPercent = Math.Clamp(100 - BinaryPrimitives.ReadInt16LittleEndian(p), 0, 100);
+            if (length < 4) continue;
+            var index = BinaryPrimitives.ReadInt16LittleEndian(p);
+            var destination = BinaryPrimitives.ReadUInt16LittleEndian(p[2..]);
+            // The drawing stores axis visibility separately from the major/minor grid stroke styles.
+            if (tag == 6060 && index == -1 && destination == 2064 && length >= 8)
+                categoryAxis = BinaryPrimitives.ReadInt32LittleEndian(p[4..]);
+            if (tag == 6011 && index == -1 && length == 8)
+            {
+                if (destination == 2152) major = BinaryPrimitives.ReadInt16LittleEndian(p[6..]) != 0;
+                if (destination == 2158) minor = BinaryPrimitives.ReadInt16LittleEndian(p[6..]) != 0;
+            }
+            if (tag == 9001 && length == 16)
+            {
+                if (destination == 2007 && index == 1) background = Color(p[10..]);
+                if (destination == 2132 && index is >= 0 and < 256)
+                {
+                    colors[index] = Color(p[10..]);
+                    if (index == 0) usesEffect = BinaryPrimitives.ReadUInt16LittleEndian(p[4..]) != 0;
+                }
+                if (destination == 2133 && index == 0) border = Color(p[10..]);
+                // The series outline overrides the default stroke when its color is explicit.
+                if (destination == 2213 && index == 0 && BinaryPrimitives.ReadUInt16LittleEndian(p[8..]) == 0)
+                    seriesOutline = Color(p[10..]);
+            }
+            // Series zero, layer zero, centered linear wash in vertical direction.
+            if (tag == 10011 && length == 30 && destination == 2132 && index == 0
+                && BinaryPrimitives.ReadInt16LittleEndian(p[4..]) == 0 && BinaryPrimitives.ReadInt32LittleEndian(p[18..]) == 0
+                && BinaryPrimitives.ReadInt16LittleEndian(p[28..]) == 14)
+            {
+                var angle = BinaryPrimitives.ReadInt16LittleEndian(p[22..]);
+                if (angle is 90 or 270)
+                    (top, bottom) = angle == 90 ? (Color(p[6..]), Color(p[12..])) : (Color(p[12..]), Color(p[6..]));
+            }
+        }
+        if (singleSeries && (!usesEffect || top is null) || colors.Count == 0) return null;
+        var palette = colors.TakeWhile((entry, index) => entry.Key == index).Select(entry => entry.Value);
+        bool? categoryGrid = null;
+        if (categoryAxis is int flags)
+        {
+            if ((flags & 12) == 0) categoryGrid = false;
+            else if (major.HasValue && minor.HasValue)
+                categoryGrid = ((flags & 4) != 0 && major.Value) || ((flags & 8) != 0 && minor.Value);
+        }
+        return new(singleSeries ? "" : string.Join(' ', palette), background, singleSeries ? top : null, singleSeries ? bottom : null,
+            singleSeries ? seriesOutline ?? border : null, ReadPlotFrame(drawing))
+        {
+            WidthPercent = widthPercent,
+            CategoryGrid = categoryGrid
+        };
+        static string Color(ReadOnlySpan<byte> rgb) => $"#{rgb[1]:x2}{rgb[3]:x2}{rgb[5]:x2}";
+    }
+
     public static CrystalReportModel ReadModel(string rptPath, CrystalRptConversionOptions? options = null)
+    {
+        return ReadModel(rptPath, options, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Reads the report model; <paramref name="cancellationToken"/> is checked between the
+    /// report's streams and subreports and while the prompt definitions are decoded.
+    /// </summary>
+    public static CrystalReportModel ReadModel(
+        string rptPath,
+        CrystalRptConversionOptions? options,
+        CancellationToken cancellationToken)
     {
         options ??= new CrystalRptConversionOptions();
         var inspection = CrystalRptBinaryReader.Open(rptPath);
@@ -16,7 +140,8 @@ public static class NativeCrystalRptConverter
             prefix: "",
             sourcePath: Path.GetFullPath(rptPath),
             fallbackName: Path.GetFileNameWithoutExtension(rptPath),
-            options);
+            options,
+            cancellationToken);
 
         foreach (var subreportPrefix in FindSubreportPrefixes(inspection.Streams))
         {
@@ -25,7 +150,8 @@ public static class NativeCrystalRptConverter
                 subreportPrefix,
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
-                options);
+                options,
+                cancellationToken);
             model.Subreports.Add(subreport);
         }
 
@@ -37,6 +163,20 @@ public static class NativeCrystalRptConverter
 
     public static void Convert(string rptPath, string xmlPath, CrystalRptConversionOptions options)
     {
+        Convert(rptPath, xmlPath, options, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Converts the report to XML; <paramref name="cancellationToken"/> is checked between the
+    /// report's streams and subreports, while the prompt definitions are decoded and before the
+    /// XML is written, so a cancelled conversion writes nothing.
+    /// </summary>
+    public static void Convert(
+        string rptPath,
+        string xmlPath,
+        CrystalRptConversionOptions options,
+        CancellationToken cancellationToken)
+    {
         var inspection = CrystalRptBinaryReader.Open(rptPath);
         options.Progress?.Invoke(
             $"Found {inspection.Streams.Count} compound-file streams in {Path.GetFileName(rptPath)}.");
@@ -46,7 +186,8 @@ public static class NativeCrystalRptConverter
             prefix: "",
             sourcePath: Path.GetFullPath(rptPath),
             fallbackName: Path.GetFileNameWithoutExtension(rptPath),
-            options);
+            options,
+            cancellationToken);
 
         foreach (var subreportPrefix in FindSubreportPrefixes(inspection.Streams))
         {
@@ -56,13 +197,15 @@ public static class NativeCrystalRptConverter
                 subreportPrefix,
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
-                options);
+                options,
+                cancellationToken);
             model.Subreports.Add(subreport);
         }
 
         ApplySubreportLayoutOrder(model);
         AssignSubreportObjectNames(model);
         ApplySubreportLinks(model, options);
+        cancellationToken.ThrowIfCancellationRequested();
         options.Progress?.Invoke("Writing Crystal XML from native C# model.");
         CrystalReportXmlWriter.Write(model, xmlPath);
     }
@@ -72,8 +215,10 @@ public static class NativeCrystalRptConverter
         string prefix,
         string sourcePath,
         string fallbackName,
-        CrystalRptConversionOptions options)
+        CrystalRptConversionOptions options,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var model = new CrystalReportModel
         {
             SourcePath = sourcePath,
@@ -97,6 +242,10 @@ public static class NativeCrystalRptConverter
             model.Core.HasSavedData = core.HasSavedData;
             model.Core.EnableSaveDataWithReport = core.EnableSaveDataWithReport;
             model.Core.EnableSaveSummariesWithReport = core.EnableSaveSummariesWithReport;
+            model.Core.ShowAllHeadersOnDrillDown = core.ShowAllHeadersOnDrillDown;
+            model.Core.ConvertDatabaseNullToDefault = core.ConvertDatabaseNullToDefault;
+            model.Core.EnableSelectDistinctRecords = core.EnableSelectDistinctRecords;
+            model.Core.FixedPrintDate = core.FixedPrintDate;
             model.Core.LeftMargin = core.LeftMargin;
             model.Core.RightMargin = core.RightMargin;
             model.Core.TopMargin = core.TopMargin;
@@ -108,6 +257,7 @@ public static class NativeCrystalRptConverter
             model.Core.PaperSource = core.PaperSource;
             model.Core.PrinterDuplex = core.PrinterDuplex;
             model.Core.PrinterName = core.PrinterName;
+            model.Core.NoPrinter = core.NoPrinter;
         }
 
         // Report summary info is metadata only: an unreadable stream leaves it blank and is reported.
@@ -130,11 +280,13 @@ public static class NativeCrystalRptConverter
             throw new InvalidDataException("The RPT file does not contain the Query Engine session stream needed to materialize database metadata.");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         options.Progress?.Invoke("Parsing Crystal Query Engine tables, fields, and joins.");
         model.Database = queryEngine is not null
             ? QueryEngineSessionParser.Parse(queryEngine)
             : LegacyCrystalDatabaseParser.Parse(legacyDatabase!);
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (contents is not null)
         {
             options.Progress?.Invoke("Parsing Crystal report formulas and sort metadata from Contents stream.");
@@ -145,7 +297,7 @@ public static class NativeCrystalRptConverter
         if (promptManager is not null)
         {
             options.Progress?.Invoke("Parsing Crystal prompt metadata.");
-            CrystalPromptManagerParser.ApplyPromptMetadata(promptManager, model.DataDefinition);
+            CrystalPromptManagerParser.ApplyPromptMetadata(promptManager, model.DataDefinition, cancellationToken);
         }
 
         var reportParameters = FindStream(streams, prefix, "ReportParametersStream 0l");
@@ -155,6 +307,7 @@ public static class NativeCrystalRptConverter
             CrystalReportParametersParser.ApplySavedParameterValues(reportParameters, model.DataDefinition);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         model.Name = NormalizeReportName(model.Name, fallbackName);
         foreach (var warning in model.Database.ParseWarnings.Concat(model.DataDefinition.ParseWarnings))
         {
@@ -180,7 +333,114 @@ public static class NativeCrystalRptConverter
             model.ConversionDiagnostics.Add(diagnostic);
             options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{function.Name}: {diagnostic.Message}");
         }
-        BindLinkedCharts(model);
+        // Legacy chart streams store the actual orientation separately from the Bar family.
+        var charts = model.DataDefinition.ReportDefinition.Areas.SelectMany(a => a.Sections)
+            .SelectMany(s => s.ReportObjects).Where(o => o.Kind == "Chart").ToArray();
+        var drawings = streams.Where(s => s.FullPath == prefix + s.Name && s.Name.StartsWith("CHART ", StringComparison.Ordinal)).ToArray();
+        // A report can contain several different graphs. Resolve authored drawing IDs
+        // within the current report, including charts embedded in a subreport.
+        foreach (var graphObject in charts)
+        {
+            if (contents is null || graphObject.GraphDrawingId is not int id || graphObject.Analysis is not { } analysis) continue;
+            var stream = FindStream(streams, prefix, FormattableString.Invariant($"CHART {id}l"));
+            if (stream is null) continue;
+            try
+            {
+                var drawing = TslvStreamReader.DecodeChartDrawing(stream.Bytes, contents.Bytes);
+                if (analysis is { ReportGroupChart: true, ChartType: Charts.ChartType.Bar, RightCategoryLegend: { } barKey }
+                    && ReadBarDrawing(drawing, false) is { Frame.IsValid: true } drawingStyle)
+                    analysis.RightCategoryLegend = barKey with { Drawing = drawingStyle };
+                if (analysis is { ChartType: Charts.ChartType.StackedBar, ShowLegend: false, Measures.Count: 1, SeriesField.Length: 0, RightCategoryLegend: { } stackedKey }
+                    && ReadBarDrawing(drawing, singleSeries: true) is { } seriesPaint)
+                    analysis.RightCategoryLegend = stackedKey with { Drawing = seriesPaint };
+                if (analysis.SpatialStyle is { Family: 1 or 6 or 12 } panelStyle && (panelStyle.Family != 6 || charts.Length != 1 || drawings.Length != 1))
+                    analysis.SpatialStyle = ReadSpatialDrawing(drawing, panelStyle);
+                if (graphObject.HiddenGaugeLegend && analysis.ChartType == Charts.ChartType.Gauge
+                    && analysis.Measures.Count == 1 && analysis.SeriesField.Length == 0 && analysis.CategoryField.Length > 0)
+                {
+                    var style = ReadSpatialDrawing(drawing, new() { Family = 12 });
+                    if (style.GaugeArc is not null)
+                    {
+                        analysis.SpatialStyle = style;
+                        analysis.ShowLegend = false;
+                    }
+                }
+                if (analysis.PerspectiveStyle is { } perspective && charts.Length > 1)
+                    analysis.PerspectiveStyle = perspective with { Plot = ReadPlotFrame(drawing), Legend = ReadPlotFrame(drawing, 2033),
+                        Palette = ReadBarDrawing(drawing, false)?.Palette ?? "", TitleColor = ReadTitleColor(drawing) ?? perspective.TitleColor };
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Chart drawing for {graphObject.Name} was not imported: {ex.Message}"); }
+        }
+        foreach (var pieObject in charts)
+        {
+            if (contents is null || pieObject.PerspectivePieDrawingId is not int id || pieObject.Analysis is not { PerspectivePie: true, SummariesAsCategories: false } pie)
+                continue;
+            var stream = FindStream(streams, prefix, FormattableString.Invariant($"CHART {id}l"));
+            if (stream is null) continue;
+            try
+            {
+                var drawing = TslvStreamReader.DecodeChartDrawing(stream.Bytes, contents.Bytes);
+                if (ReadPerspectivePieLayout(drawing, pie.ShowLegend) is { } layout)
+                    pie.SpatialStyle = ReadSpatialDrawing(drawing, new() { Family = 3, BottomPie = layout });
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Pie drawing for {pieObject.Name} was not imported: {ex.Message}"); }
+        }
+        if (charts.Length == 1 && drawings.Length == 1 && contents is not null
+            && charts[0].Analysis is {} authored && (authored.PrintAxis is not null || authored.RightCategoryLegend is not null || authored.SpatialStyle is not null || authored.PerspectiveStyle is not null))
+        {
+            try
+            {
+                var drawing = TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes);
+                if (authored.PerspectiveStyle is { } perspective)
+                {
+                    var seriesDrawing = ReadBarDrawing(drawing, false);
+                    authored.PerspectiveStyle = perspective with { Plot = ReadPlotFrame(drawing), Legend = ReadPlotFrame(drawing, 2033),
+                        Palette = seriesDrawing?.Palette ?? "", TitleColor = ReadTitleColor(drawing) ?? perspective.TitleColor };
+                }
+                if (authored.SpatialStyle is { BottomPie: null } spatial)
+                {
+                    authored.SpatialStyle = ReadSpatialDrawing(drawing, spatial);
+                    // Incomplete stock bindings retain the empty chart's saved axis, without inventing OHLC values.
+                    if (spatial.Family == 10 && authored.ChartType == Charts.ChartType.Ohlc && authored.Measures.Count < 4)
+                        authored.PrintAxis = ReadRetainedStockAxis(drawing, spatial) ?? authored.PrintAxis;
+                }
+                if (authored.PrintAxis is {} axis && ReadPlotFrame(drawing) is {} frame) authored.PrintAxis = axis with { Frame = frame };
+                if (authored.RightCategoryLegend is {} key && (authored.HasFixedSeriesBarAxis || authored.ChartType == Charts.ChartType.StackedBar100 || key.OnLeft || key.RotateCategories || !authored.ShowLegend)
+                    && ReadBarDrawing(drawing, !authored.HasFixedSeriesBarAxis && !authored.ShowLegend) is {} paint)
+                    authored.RightCategoryLegend = key with { Drawing = paint };
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Chart frame was not imported: {ex.Message}"); }
+        }
+        if (charts.Length == 1 && charts[0].Analysis is { ChartType: Charts.ChartType.Bar } chart && drawings.Length == 1
+            && drawings[0].Bytes.FirstOrDefault() == 0x78)
+        {
+            try
+            {
+                using var zip = new System.IO.Compression.ZLibStream(new MemoryStream(drawings[0].Bytes), System.IO.Compression.CompressionMode.Decompress);
+                var header = new byte[278];
+                if (zip.ReadAtLeast(header, header.Length, false) == header.Length && header.AsSpan().StartsWith("TIFFGRAPH"u8)
+                    && header.AsSpan(268).StartsWith(new byte[] { 0xd2, 7, 16, 0 }) && header.AsSpan(272).StartsWith("HBars\0"u8))
+                {
+                    chart.ChartType = Charts.ChartType.HorizontalBar;
+                    if (chart.RightCategoryLegend is not null)
+                    {
+                        chart.ChartCategoryLegend = false;
+                        chart.RightCategoryLegend = null;
+                    }
+                }
+            }
+            catch (InvalidDataException) { /* Keep the declared Bar family for unreadable drawing data. */ }
+        }
+        // A chart Crystal prints as nothing but its category label (a cheque's VOID stamp) keeps that label as a marker.
+        if (charts.Length == 1 && drawings.Length == 1 && contents is not null && charts[0] is { Analysis: null, ChartCategoryField.Length: > 0 } stamp)
+        {
+            try { stamp.ChartMarker = ReadChartMarker(TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes), stamp.ChartCategoryField); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Chart drawing was not imported: {ex.Message}"); }
+        }
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
@@ -198,16 +458,28 @@ public static class NativeCrystalRptConverter
                     obj.AnalysisDiagnostic = "The containing analytical group scope could not be resolved.";
                 }
             }
-            if (obj.Analysis is { } bound)
+            if (obj.ChartMarker is { } marker)
             {
-                var defaults = new CrystalConversionDiagnostic("CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
-                    "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained."
-                    + (bound.BindingNotes.Count == 0 ? "" : " " + string.Join(" ", bound.BindingNotes.Distinct(StringComparer.Ordinal))));
+                var label = new CrystalConversionDiagnostic("CRYSTAL_CHART_MARKER", model.Name, section.Name, obj.Name, obj.Kind,
+                    $"The chart's saved drawing shows only its category label: it prints the value of {marker.Binding} in {marker.Font}, rotated {marker.Angle} degrees, across the frame. Original TSLV bytes are retained.");
+                model.ConversionDiagnostics.Add(label);
+                options.Progress?.Invoke($"[{label.Code}] {model.Name}/{section.Name}/{obj.Name}: {label.Message}");
+                continue;
+            }
+            if (obj.Analysis is not null)
+            {
+                var defaults = new CrystalConversionDiagnostic(obj.Analysis.NativeCrossTab is { Templates.Count: > 0 }
+                    ? "CRYSTAL_ANALYSIS_NATIVE_LAYOUT" : "CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
+                    obj.Analysis.NativeCrossTab is not null
+                        ? "Native analytical bindings, cell templates, dimensions, padding, fonts, backgrounds, grid strokes, total placement, captions and supported cell conditions were imported. Original TSLV bytes are retained; whole-report visual parity requires comparison against Crystal output."
+                        : "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained.");
                 model.ConversionDiagnostics.Add(defaults);
                 options.Progress?.Invoke($"[{defaults.Code}] {model.Name}/{section.Name}/{obj.Name}: {defaults.Message}");
                 continue;
             }
-            var message = $"{obj.Kind} conversion preserves available identity, bounds, common formatting and opaque TSLV bytes; chart data/series and cross-tab grouping/cells are not interpreted or rendered."
+            var message = (obj.Kind == "Map"
+                ? "Geographic map bounds, visibility and original TSLV bytes are retained. Map artwork is unavailable."
+                : $"{obj.Kind} conversion preserves available identity, bounds, common formatting and opaque TSLV bytes; chart data/series and cross-tab grouping/cells are not interpreted or rendered.")
                 + (source.MetadataDiagnostics.Count == 0 ? "" : " " + string.Join(" ", source.MetadataDiagnostics))
                 + (obj.AnalysisDiagnostic.Length == 0 ? "" : " " + obj.AnalysisDiagnostic);
             var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_UNSUPPORTED_OBJECT", model.Name, section.Name, obj.Name, obj.Kind, message);
@@ -216,44 +488,6 @@ public static class NativeCrystalRptConverter
         }
         CrystalPictureStorage.Apply(model, streams, prefix, options.Progress);
         return model;
-    }
-
-    private static void BindLinkedCharts(CrystalReportModel model)
-    {
-        var crosstabs = model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections).SelectMany(section => section.ReportObjects)
-            .Where(obj => obj.Kind == "CrossTab" && obj.Analysis is { Measures.Count: > 0 }).Select(obj => obj.Analysis!).ToList();
-        foreach (var chart in model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections).SelectMany(section => section.ReportObjects)
-            .Where(obj => obj.Kind == "Chart" && obj.Analysis is { LinkedToCrossTab: true, Measures.Count: 0 }))
-        {
-            var source = crosstabs.FirstOrDefault();
-            if (source is null)
-            {
-                chart.Analysis = null;
-                chart.AnalysisDiagnostic = "The linked chart has no cross-tab with summary fields to draw.";
-                continue;
-            }
-            var analysis = chart.Analysis!;
-            analysis.Measures = source.Measures.Select(measure => measure.Clone()).ToList();
-            analysis.RowFields = [.. source.RowFields];
-            analysis.ColumnFields = [.. source.ColumnFields];
-            analysis.GroupKinds = new Dictionary<string, int>(source.GroupKinds, StringComparer.OrdinalIgnoreCase);
-            analysis.CategoryField = source.RowFields.FirstOrDefault(field => field.Length > 0) ?? source.ColumnFields.FirstOrDefault(field => field.Length > 0) ?? "";
-            analysis.SeriesField = analysis.CategoryField.Length > 0 && source.ColumnFields.FirstOrDefault(field => field.Length > 0 && !field.Equals(analysis.CategoryField, StringComparison.OrdinalIgnoreCase)) is { } series ? series : "";
-            analysis.SummariesAsCategories = analysis.CategoryField.Length == 0;
-            if (analysis.ChartType is ChartType.Pie or ChartType.Donut)
-            {
-                analysis.SeriesField = "";
-                if (!analysis.SummariesAsCategories && analysis.Measures.Count > 1) analysis.Measures = [analysis.Measures[0]];
-            }
-            analysis.SortCategories = !analysis.SummariesAsCategories;
-            analysis.LinkedToCrossTab = false;
-            analysis.BindingNotes.Add("The chart is drawn from the cross-tab's row, column and summary fields.");
-            if (analysis.Validate("Chart") is { } error)
-            {
-                chart.Analysis = null;
-                chart.AnalysisDiagnostic = error;
-            }
-        }
     }
 
     private static string NormalizeReportName(string currentName, string fallbackName)
@@ -381,9 +615,9 @@ public static class NativeCrystalRptConverter
     // object; the subreport's record selection formula does the filtering (linking only adds or removes a
     // "{field} = {?Pm-x}" operand of its top-level And). The stored subreport field is metadata that the runtime only
     // uses for dependency tracking and can be stale, so a link becomes a row filter (SubreportFieldName) only when the
-    // formula ANDs exactly one such database-field test for its discrete, single-valued parameter, and a stored field
-    // that disagrees with the formula is reported. A formula made of nothing but those tests is fully expressed by the
-    // links and is dropped; any other formula is kept verbatim.
+    // formula ANDs exactly one such database-field test for its discrete, single-valued parameter; a stored field
+    // that disagrees with the formula is ignored, as it is in Crystal. A formula made of nothing but those tests is fully
+    // expressed by the links and is dropped; any other formula is kept verbatim.
     private static void ApplySubreportLinks(CrystalReportModel model, CrystalRptConversionOptions options)
     {
         var subreportObjects = model.DataDefinition.ReportDefinition.Areas
@@ -429,15 +663,13 @@ public static class NativeCrystalRptConverter
                 var storedField = stored.SubreportFieldType < 0
                     ? ""
                     : CrystalReportContentsParser.ResolveFieldManagerReference(data, stored.SubreportFieldType, stored.SubreportFieldIndex);
+                // A stored field that disagrees with the formula (Crystal keeps the dialog's field after the formula is edited) is
+                // ignored, as Crystal ignores it; the output is Crystal's, so it is logged but not reported as a conversion diagnostic.
                 if (storedField.Length > 0 && (field.Length > 0
                         ? !storedField.Equals(field, StringComparison.OrdinalIgnoreCase)
                         : !data.RecordSelectionFormula.Contains(storedField, StringComparison.OrdinalIgnoreCase)))
-                {
-                    AddLinkDiagnostic(subreport, options, $"Subreport '{subreport.Name}' stores {storedField} as the linked field for {parameter.FormulaName}, " +
-                        (field.Length > 0
-                            ? $"but its record selection formula tests {field}; the link filters on {field}, as Crystal filters by the formula."
-                            : $"but its record selection formula does not use {storedField}; the link only supplies the parameter, as Crystal filters by the formula."));
-                }
+                    options.Progress?.Invoke($"[CRYSTAL_SUBREPORT_LINK] {subreport.Name}: stores {storedField} as the linked field for {parameter.FormulaName}, " +
+                        (field.Length > 0 ? $"but its record selection formula tests {field}; the link filters on {field}." : $"but its record selection formula does not use {storedField}; the link only supplies the parameter."));
 
                 subreport.SubreportLinks.Add(new CrystalSubreportLinkModel
                 {

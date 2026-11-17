@@ -11,6 +11,13 @@ internal static class CrystalMetafileImage
     public static string Embed(ReadOnlySpan<byte> bytes)
     {
         Limit(bytes);
+        // RPT picture storage can include stream padding after a complete BMP.
+        // Preserve the authored bitmap's declared boundary, not its OLE wrapper tail.
+        if (bytes.Length >= 54 && bytes[..2].SequenceEqual("BM"u8))
+        {
+            var size = U32(bytes, 2);
+            if (size >= 54 && size < bytes.Length && U32(bytes, 10) <= size) bytes = bytes[..(int)size];
+        }
         if (bytes.Length >= 44 && U32(bytes, 0) == 1 && U32(bytes, 40) == 0x464D4520)
             return ReportObjectVisual.EmbedImage(Emf(bytes));
         if (bytes.Length >= 4 && (U32(bytes, 0) == 0x9AC6CDD7 || U16(bytes, 0) is 1 or 2 && U16(bytes, 2) == 9))

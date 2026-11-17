@@ -72,14 +72,17 @@ internal static class ArtifactChecks
                 chartFile = new TranslatedFile(relative, stem, Path.GetRelativePath(output.Path, xml).Replace('\\', '/'), CrystalXmlViewerDescriptor.FormatKey, "pass", null, binding.Fingerprint, binding.DataPath);
                 var text = File.ReadAllText(xml);
                 check(text.Contains("ChartObject", StringComparison.Ordinal), "chart sample keeps its chart object");
-                check(result.Pages.Any(page => page.Contains("fx-chart", StringComparison.Ordinal)
-                    && page.Contains("<svg", StringComparison.Ordinal)
-                    && page.Contains("<rect", StringComparison.Ordinal)
+                var rendered = ReportNativeExport.RenderPagesAsync(result.Snapshots).GetAwaiter().GetResult();
+                check(rendered.Any(page => page.Contains("fx-chart", StringComparison.Ordinal)
+                    && page.Contains("data:image/svg", StringComparison.Ordinal)
                     && page.Contains("Graph1", StringComparison.Ordinal)), "chart page is ChartControl output");
             }
             if (relative.Contains("crosstab_base", StringComparison.OrdinalIgnoreCase))
-                check(result.Pages.Any(page => page.Contains("fx-pivot-table", StringComparison.Ordinal) || page.Contains("fx-report-table-fragment", StringComparison.Ordinal)),
+            {
+                var rendered = ReportNativeExport.RenderPagesAsync(result.Snapshots).GetAwaiter().GetResult();
+                check(rendered.Any(page => page.Contains("fx-pivot-table", StringComparison.Ordinal) || page.Contains("fx-report-table-fragment", StringComparison.Ordinal)),
                     "cross-tab page is PivotControl output");
+            }
         }
         check(HashReports(crystal).SequenceEqual(before), "converting sample reports does not change the source .rpt bytes");
         check(chartFile is not null, "chart sample was converted");

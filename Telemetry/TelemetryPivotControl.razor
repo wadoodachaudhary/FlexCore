@@ -1,0 +1,129 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-tpiv-root @ThemeClass">
+        @if (ProductSnapshot is null || ProductSnapshot.PivotRows.Count == 0)
+        {
+            <div class="fx-tel-empty">No telemetry events available in the selected window for interactive pivot analysis.</div>
+        }
+        else
+        {
+            <div class="fx-tel-subbar">
+                <div class="fx-tel-pill-group">
+                    <span class="fx-tel-subbar-label">Quick Pivot Presets:</span>
+                    <ButtonControl CssClass="@PillCss(_preset == "ModuleByKind")" Tag="fx-tpiv-p1" OnClick='() => ApplyPreset("ModuleByKind")'>Module × Event Kind</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_preset == "ScreenByUser")" Tag="fx-tpiv-p2" OnClick='() => ApplyPreset("ScreenByUser")'>Screen × User</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_preset == "ControlByAction")" Tag="fx-tpiv-p3" OnClick='() => ApplyPreset("ControlByAction")'>Control Type × Action</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_preset == "ScreenByHour")" Tag="fx-tpiv-p4" OnClick='() => ApplyPreset("ScreenByHour")'>Screen × Time of Day</ButtonControl>
+                </div>
+                <span class="fx-tel-panel-hint">Drag fields between Rows, Columns, Values, and Filters to build custom product cross-tabs (@ProductSnapshot.PivotRows.Count.ToString("N0") events)</span>
+            </div>
+
+            <div class="fx-tpiv-body">
+                <PivotControl @key="_pivotKey"
+                              TValue="TelemetryPivotRow"
+                              Tag="fx-telemetry-pivot"
+                              DataSource="@ProductSnapshot.PivotRows"
+                              Interactive="true"
+                              RowFields="@_rowFields"
+                              ColumnFields="@_colFields"
+                              ValueField="@nameof(TelemetryPivotRow.Events)"
+                              Aggregation="AggregateType.Sum"
+                              ValueFormat="N0"
+                              FieldLabels="@FieldLabels"
+                              ShowGrandTotals="true"
+                              ShowSubTotals="true"
+                              Height="100%" />
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    private static readonly Dictionary<string, string> FieldLabels = new(StringComparer.Ordinal)
+    {
+        [nameof(TelemetryPivotRow.Tenant)] = "Tenant / DB",
+        [nameof(TelemetryPivotRow.Module)] = "Module",
+        [nameof(TelemetryPivotRow.Screen)] = "Screen",
+        [nameof(TelemetryPivotRow.UserId)] = "User",
+        [nameof(TelemetryPivotRow.EventKind)] = "Event Kind",
+        [nameof(TelemetryPivotRow.ControlType)] = "Control Type",
+        [nameof(TelemetryPivotRow.Control)] = "Control ID",
+        [nameof(TelemetryPivotRow.Action)] = "Action",
+        [nameof(TelemetryPivotRow.DayOfWeek)] = "Day of Week",
+        [nameof(TelemetryPivotRow.DateLabel)] = "Date",
+        [nameof(TelemetryPivotRow.HourBlock)] = "Time Block",
+        [nameof(TelemetryPivotRow.Events)] = "Events",
+        [nameof(TelemetryPivotRow.DurationSeconds)] = "Duration (s)"
+    };
+
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private string _preset = "ModuleByKind";
+    private int _pivotKey;
+    private IReadOnlyList<string> _rowFields = new[] { nameof(TelemetryPivotRow.Module), nameof(TelemetryPivotRow.Screen) };
+    private IReadOnlyList<string> _colFields = new[] { nameof(TelemetryPivotRow.EventKind) };
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("TelemetryPivotControl", () => "TelemetryPivot");
+    protected override string? ResolveControlIdentifier() => "TelemetryPivot";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private void ApplyPreset(string preset)
+    {
+        _preset = preset;
+        (_rowFields, _colFields) = preset switch
+        {
+            "ScreenByUser" => (
+                (IReadOnlyList<string>)new[] { nameof(TelemetryPivotRow.Screen) },
+                (IReadOnlyList<string>)new[] { nameof(TelemetryPivotRow.UserId) }),
+            "ControlByAction" => (
+                new[] { nameof(TelemetryPivotRow.ControlType) },
+                new[] { nameof(TelemetryPivotRow.Action) }),
+            "ScreenByHour" => (
+                new[] { nameof(TelemetryPivotRow.Screen) },
+                new[] { nameof(TelemetryPivotRow.HourBlock) }),
+            _ => (
+                new[] { nameof(TelemetryPivotRow.Module), nameof(TelemetryPivotRow.Screen) },
+                new[] { nameof(TelemetryPivotRow.EventKind) })
+        };
+        _pivotKey++;
+        RecordControlAction("PivotPresetApplied", preset);
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Tenant,Module,Screen,User,EventKind,ControlType,Control,Action,Date,HourBlock,Events,DurationSeconds");
+        foreach (var r in ProductSnapshot?.PivotRows ?? Array.Empty<TelemetryPivotRow>())
+        {
+            sb.AppendLine($"{Csv(r.Tenant)},{Csv(r.Module)},{Csv(r.Screen)},{Csv(r.UserId)},{Csv(r.EventKind)},{Csv(r.ControlType)},{Csv(r.Control)},{Csv(r.Action)},{Csv(r.DateLabel)},{Csv(r.HourBlock)},{r.Events},{r.DurationSeconds.ToString("0.00", CultureInfo.InvariantCulture)}");
+        }
+        return ("telemetry-pivot-dataset", sb.ToString());
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

@@ -1,15 +1,36 @@
 @namespace Fx.ControlKit.Reports
 
+@{ var paper = ReportDesignerEditing.PhysicalPaperSize(Page.Size); }
 <article class="fx-report-positioned-page" aria-label="@Page.Title" data-page="@Page.Number"
-    style="@($"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:{Px(Page.Size.ContentWidthTwips + Page.Size.MarginLeftTwips + Page.Size.MarginRightTwips)}px;height:{Px(Page.Size.ContentHeightTwips + Page.Size.MarginTopTwips + Page.Size.MarginBottomTwips)}px;break-after:page;")">
+    style="@($"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:{Px(paper.Width)}px;height:{Px(paper.Height)}px;break-after:page;")">
     <div style="@($"position:absolute;left:{Px(Page.Size.MarginLeftTwips)}px;top:{Px(Page.Size.MarginTopTwips)}px;width:{Px(Page.Size.ContentWidthTwips)}px;height:{Px(Page.Size.ContentHeightTwips)}px;overflow:hidden;")">
-        @foreach (var band in Page.Bands)
+        @for (var bandIndex = 0; bandIndex < Page.Bands.Count; bandIndex++)
         {
+            var band = Page.Bands[bandIndex];
             <section data-section="@band.Name" style="@($"position:absolute;overflow:hidden;{(band.WidthTwips > 0 ? $"left:{Px(band.LeftTwips)}px;width:{Px(band.WidthTwips)}px" : "left:0;width:100%")};top:{Px(band.TopTwips)}px;height:{Px(band.HeightTwips)}px;background:{ReportObjectRenderer.Color(band.Background)};")">
-                @foreach (var item in band.Objects)
+                @foreach (var anchor in IncludeNavigationAnchors ? band.NavigationAnchors : Array.Empty<string>())
                 {
-                    <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">
-                        @if (item.Table is not null)
+                    <span id="@anchor" class="fx-rpt-native-anchor" style="position:absolute;inset:0;pointer-events:none;"></span>
+                }
+                @{ ReportPageObject? previous = null; }
+                @for (var itemIndex = 0; itemIndex < band.Objects.Count; itemIndex++)
+                {
+                    var item = band.Objects[itemIndex];
+                    var marked = Highlight?.ContentOf(bandIndex, itemIndex);
+                    var overprint = ReportObjectRenderer.IsDuplicateNativeTextPaint(previous, item, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips);
+                    previous = item;
+                    var target = !overprint && OnDrillDown.HasDelegate && item.FormattedContent.Length > 0
+                        && item.Element.Kind is "Text" or "Field" or "FieldHeading" ? band.DrillTarget : null;
+                    <div data-object="@item.Element.Name" data-fx-native-overprint="@(overprint ? "true" : null)" aria-hidden="@(overprint ? "true" : null)"
+                         class="@(target is null ? null : "fx-report-drill-object")" data-drill-group="@target?.GroupId"
+                         role="@(target is null ? null : "link")" tabindex="@(target is null ? (int?)null : 0)"
+                         @onclick="ClickHandler(target)" @onkeydown="KeyHandler(target)"
+                         style="@(ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips) + (overprint ? "visibility:hidden;" : ""))">
+                        @if (marked is not null)
+                        {
+                            @((MarkupString)marked)
+                        }
+                        else if (item.Table is not null)
                         {
                             <ReportTableFragmentControl Fragment="item.Table" Title="item.Element.Name" />
                         }
@@ -19,7 +40,7 @@
                         }
                         else
                         {
-                            @((MarkupString)item.FormattedContent)
+                            @((MarkupString)(PrintNumericValues ? item.UnmaskedNumericContent ?? item.FormattedContent : item.FormattedContent))
                         }
                     </div>
                 }
@@ -30,5 +51,17 @@
 
 @code {
     [Parameter, EditorRequired] public ReportPageSnapshot Page { get; set; } = default!;
+    [Parameter] public bool PrintNumericValues { get; set; }
+    [Parameter] public bool IncludeNavigationAnchors { get; set; } = true;
+    [Parameter] public EventCallback<string> OnDrillDown { get; set; }
+    /// <summary>Find's marks: a marked object shows its marked content inside its own element, which keeps its drill-down.</summary>
+    [Parameter] public ReportPageHighlight? Highlight { get; set; }
+    private Task DrillDown(ReportDrillTarget? target) => target is null ? Task.CompletedTask : OnDrillDown.InvokeAsync(target.GroupId);
+    private EventCallback<Microsoft.AspNetCore.Components.Web.MouseEventArgs> ClickHandler(ReportDrillTarget? target)
+        => target is null ? default : EventCallback.Factory.Create<Microsoft.AspNetCore.Components.Web.MouseEventArgs>(this, () => DrillDown(target));
+    private EventCallback<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs> KeyHandler(ReportDrillTarget? target)
+        => target is null ? default : EventCallback.Factory.Create<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs>(this, e => DrillKeyDown(e, target));
+    private Task DrillKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, ReportDrillTarget? target)
+        => e.Key == "Enter" ? DrillDown(target) : Task.CompletedTask;
     private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
 }

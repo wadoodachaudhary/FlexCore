@@ -9,6 +9,9 @@ public interface ITreeGridControlOwner
 {
     void AddColumn(TreeGridColumn column);
     void RemoveColumn(TreeGridColumn column);
+
+    /// <summary>A registered column's drawn settings changed after the owner drew it.</summary>
+    void ColumnParametersChanged(TreeGridColumn column) { }
 }
 
 /// <summary>
@@ -77,8 +80,10 @@ public sealed class TreeGridCellEditContext : ICellEditorHost
 /// <summary>
 /// Defines a column in the TreeGridControl. Equivalent to SyncFusion's TreeGridColumn.
 /// </summary>
-public class TreeGridColumn : ComponentBase, IDisposable
+public class TreeGridColumn : FlexKitControlBase, IDisposable
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Field) ? Field : HeaderText;
     [CascadingParameter] internal ITreeGridControlOwner? Owner { get; set; }
 
     [Parameter] public string Field { get; set; } = "";
@@ -91,7 +96,7 @@ public class TreeGridColumn : ComponentBase, IDisposable
     [Parameter] public bool AllowAutoFit { get; set; } = true;
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
     /// <summary>Cell text alignment. Unset defaults by column type: Date
-    /// columns right-align (vsFlexGrid flexDTDate parity, HHM-920); everything
+    /// columns right-align (vsFlexGrid flexDTDate parity); everything
     /// else left-aligns. Set explicitly to override.</summary>
     [Parameter] public TextAlign? TextAlign { get; set; }
 
@@ -145,6 +150,33 @@ public class TreeGridColumn : ComponentBase, IDisposable
     {
         Owner?.AddColumn(this);
     }
+
+    // The tree draws its header and cells before its columns receive new parameters in
+    // the same render, so a changed setting would show only at the tree's next render.
+    // The column asks for that render when something the tree draws has changed.
+    private string? _drawnSettings;
+
+    protected override void OnParametersSet()
+    {
+        var settings = DrawnSettingsKey();
+        if (_drawnSettings is not null && settings != _drawnSettings)
+            Owner?.ColumnParametersChanged(this);
+        _drawnSettings = settings;
+    }
+
+    // Templates and callbacks are left out: hosts pass new delegate instances on every
+    // render, and a template reads the host's state when it runs.
+    private string DrawnSettingsKey() => string.Join("\u001f",
+        Field, HeaderText, Width, MinWidth, MaxWidth, AllowAutoFit, Type, TextAlign, Format, Visible,
+        IsFrozen, FrozenPosition, IsPrimaryKey, AllowEditing, AllowSorting, AllowFiltering, AllowResizing,
+        HeaderIconKind, HeaderIconSrc, HeaderIconAlt, HeaderIconTitle, HeaderIconCssClass, HeaderIconVisible,
+        CellEditDisplayCssClass, ToolbarKey(HeaderToolbarItems));
+
+    // By content: hosts commonly build the list anew on every render.
+    private static string ToolbarKey(IEnumerable<GridToolbarItem>? items) => items is null ? "" :
+        string.Join("\u001e", items.Select(item => string.Join("\u001d",
+            item.Key, item.Text, item.Title, item.IconSrc, item.IconAlt, item.Glyph, item.Action,
+            item.Disabled, item.Visible, item.SeparatorBefore, item.SeparatorAfter, "[" + ToolbarKey(item.Items) + "]")));
 
     public void Dispose()
     {

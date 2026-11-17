@@ -27,6 +27,62 @@
     --fx-btn-active-bg: #b6b6b6;
     --fx-btn-shadow: none;
 
+    /* Button variants (btn-primary, btn-secondary, btn-success, btn-warning, btn-danger, btn-outline-primary) */
+    --fx-btn-primary-bg: #0d6efd;
+    --fx-btn-primary-color: #fff;
+    --fx-btn-primary-border-color: #0d6efd;
+    --fx-btn-primary-hover-bg: #0b5ed7;
+    --fx-btn-primary-hover-border-color: #0a58ca;
+    --fx-btn-primary-active-bg: #0a58ca;
+    --fx-btn-primary-active-border-color: #0a53be;
+    --fx-btn-secondary-bg: #6c757d;
+    --fx-btn-secondary-color: #fff;
+    --fx-btn-secondary-border-color: #6c757d;
+    --fx-btn-secondary-hover-bg: #5c636a;
+    --fx-btn-secondary-hover-border-color: #565e64;
+    --fx-btn-secondary-active-bg: #565e64;
+    --fx-btn-secondary-active-border-color: #51585e;
+    --fx-btn-success-bg: #198754;
+    --fx-btn-success-color: #fff;
+    --fx-btn-success-border-color: #198754;
+    --fx-btn-success-hover-bg: #157347;
+    --fx-btn-success-hover-border-color: #146c43;
+    --fx-btn-success-active-bg: #146c43;
+    --fx-btn-success-active-border-color: #13653f;
+    --fx-btn-warning-bg: #ffc107;
+    --fx-btn-warning-color: #000;
+    --fx-btn-warning-border-color: #ffc107;
+    --fx-btn-warning-hover-bg: #ffca2c;
+    --fx-btn-warning-hover-border-color: #ffc720;
+    --fx-btn-warning-active-bg: #ffcd39;
+    --fx-btn-warning-active-border-color: #ffc720;
+    --fx-btn-danger-bg: #dc3545;
+    --fx-btn-danger-color: #fff;
+    --fx-btn-danger-border-color: #dc3545;
+    --fx-btn-danger-hover-bg: #bb2d3b;
+    --fx-btn-danger-hover-border-color: #b02a37;
+    --fx-btn-danger-active-bg: #b02a37;
+    --fx-btn-danger-active-border-color: #a52834;
+    --fx-btn-outline-primary-color: #0d6efd;
+    --fx-btn-outline-primary-border-color: #0d6efd;
+    --fx-btn-outline-primary-hover-bg: #0d6efd;
+    --fx-btn-outline-primary-hover-color: #fff;
+    --fx-btn-outline-primary-hover-border-color: #0d6efd;
+    --fx-btn-outline-primary-active-bg: #0a58ca;
+    --fx-btn-outline-primary-active-border-color: #0a53be;
+
+    /* Split button (SplitButtonControl) */
+    --fx-split-btn-bg: #2563eb;
+    --fx-split-btn-color: #ffffff;
+    --fx-split-btn-border-color: #1d4ed8;
+    --fx-split-btn-hover-bg: #1d4ed8;
+    --fx-split-btn-divider-color: rgba(255, 255, 255, 0.25);
+    --fx-split-btn-radius: 6px;
+    --fx-split-btn-menu-bg: #ffffff;
+    --fx-split-btn-menu-border-color: #e2e8f0;
+    --fx-split-btn-menu-color: #1e293b;
+    --fx-split-btn-menu-hover-bg: #f1f5f9;
+
     /* Inputs */
     --fx-input-bg: #ffffff;
     --fx-input-color: #000000;

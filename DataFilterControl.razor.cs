@@ -35,7 +35,7 @@ public sealed class FilterGroup
     public List<FilterGroup> Groups { get; set; } = new();
 }
 
-public partial class DataFilterControl : ComponentBase
+public partial class DataFilterControl : FlexKitControlBase
 {
     [Parameter] public List<FilterProperty> Properties { get; set; } = new();
     [Parameter] public FilterGroup? Value { get; set; }
