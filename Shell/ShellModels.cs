@@ -194,12 +194,13 @@ public static class ShellToolCatalog
     public static ShellToolCard DiagramToCode { get; } = Card("diagram-to-code", "Diagram to Code", "Convert diagrams into working code.", ShellIcon.DiagramToCode, "#a61e4d", "diagram-to-code");
     public static ShellToolCard Chat { get; } = Card("chat", "New Chat", "Chat with AI to solve any coding problem.", ShellIcon.Chat, "#0c8599", "chat");
     public static ShellToolCard Comments { get; } = Card("comments", "Comment Generator", "Add docstrings and comments in the language's idiom.", ShellIcon.Comments, "#2b8a3e", "comments");
+    public static ShellToolCard Security { get; } = Card("security", "Security Analyzer", "Scan converted code for injection, secrets, and unsafe calls.", ShellIcon.Reviewer, "#c92a2a", "security");
 
     /// <summary>Grid order matching the tools menu, then Comment Generator.</summary>
     public static IReadOnlyList<ShellToolCard> Menu { get; } =
     [
         Generator, Assistant, Explainer, Enhancer, Converter, Documentation,
-        UnitTests, Reviewer, Optimizer, Runner, Diagram, DiagramToCode, Chat, Comments
+        UnitTests, Reviewer, Optimizer, Runner, Diagram, DiagramToCode, Chat, Security, Comments
     ];
 
     public static IReadOnlyList<ShellStartCard> GetStarted { get; } =
