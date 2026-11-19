@@ -440,13 +440,19 @@
         bool includeOptional)
         => PromptWithReadOnlyValuesAsync(title, parameters, initialValues, context, includeOptional, []);
 
-    internal async Task<Dictionary<string, object>?> PromptWithReadOnlyValuesAsync(
+    internal Task<Dictionary<string, object>?> PromptWithReadOnlyValuesAsync(
         string title,
         List<ReportParameter> parameters,
         IReadOnlyDictionary<string, object>? initialValues,
         ReportPickListContext? context,
         bool includeOptional,
         IReadOnlyList<KeyValuePair<string, string>> readOnlyValues)
+        => PromptForValuesAsync(title, parameters, initialValues, context, includeOptional, readOnlyValues, null);
+
+    internal async Task<Dictionary<string, object>?> PromptForValuesAsync(
+        string title, List<ReportParameter> parameters, IReadOnlyDictionary<string, object>? initialValues,
+        ReportPickListContext? context, bool includeOptional, IReadOnlyList<KeyValuePair<string, string>> readOnlyValues,
+        IReadOnlyDictionary<string, object>? suppliedOnLaunch)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         StopLookups();
@@ -485,6 +491,11 @@
             foreach (var p in _parameters)
             {
                 if (_dependencies.ContainsKey(p.Name)) continue;
+                // Reopening a supplied numeric prompt allows typing any number when the report authors no choices.
+                // Do not query the binding's distinct values just to turn this field into a drop-down.
+                if (suppliedOnLaunch?.ContainsKey(p.Name) == true && p.AllowCustomCurrentValues && !p.AllowMultiple && !p.AllowRange
+                    && p.ParameterType is ReportParameterType.Integer or ReportParameterType.Decimal && p.DefaultValues.Count == 0
+                    && (p.PickListIsInferred || string.IsNullOrEmpty(p.PickListSql)) && !p.PickListIsAuthored) continue;
                 // Prefer the ReportParameter overload — the provider can
                 // run the loader's auto-derived PickListSql (sourced from
                 // the Crystal XML's RecordSelectionFormula binding) so

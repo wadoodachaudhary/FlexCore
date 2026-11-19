@@ -21,9 +21,10 @@ public sealed partial class ReportLayoutSession
         public int QueryRows { get; set; }
         public bool HasPageConditions { get; set; }
         public bool HasGrowingText { get; set; }
-        public Dictionary<string, Func<int, int, bool, string>> PageValues { get; } = new();
-        /// <summary>Page tokens that resolve to markup built from the page's value, not to encoded text.</summary>
-        public Dictionary<string, Func<int, int, bool, string>> PageMarkup { get; } = new();
+        /// <summary>The run's deferred page tokens by their text. Order is the token's place in the replacement order: the
+        /// tokens that resolve to markup built from the page's value first, then those that resolve to encoded text, each
+        /// kind in the order it was registered.</summary>
+        public Dictionary<string, (long Order, bool Markup, Func<int, int, bool, string> Value)> PageTokens { get; } = new(StringComparer.Ordinal);
         public bool PhysicalSchedule { get; set; }
         /// <summary>The variables of the run's reports, worked out at the run's first page break that needs them.</summary>
         public RunVariables? Variables { get; set; }
@@ -232,13 +233,13 @@ public sealed partial class ReportLayoutSession
     private string DeferredPageValue(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime, ReportNativeNumberFormat? nativeNumber, ReportNativeNumericFormat? nativeNumeric)
     {
         if (NeedsPrintState(reference)) throw new NotSupportedException("Page formulas cannot mutate shared/global variables during pagination.");
-        var token = Guid.NewGuid().ToString("N") + "-formula";
-        _state.PageValues[token] = (page, count, repeated) =>
+        var token = Guid.NewGuid().ToString("N") + PageTokenSuffix;
+        _state.PageTokens[token] = (PageTextOrder + _state.PageTokens.Count, false, (page, count, repeated) =>
         {
             var previousPage = _formulaPage; var previousCount = _formulaPages; var previousRepeat = _repeatedHeader;
             try { _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated; return Format(reference, row, format, nativeDateTime, nativeNumber, nativeNumeric); }
             finally { _formulaPage = previousPage; _formulaPages = previousCount; _repeatedHeader = previousRepeat; }
-        };
+        });
         return token;
     }
     // A page value whose markup depends on the value itself (a chart marker is placed by its text width): the token
@@ -246,25 +247,62 @@ public sealed partial class ReportLayoutSession
     private string DeferredPageMarkup(string reference, int row, Func<string, string> markup)
     {
         var token = DeferredPageValue(reference, row, "", null, null, null);
-        var value = _state.PageValues[token];
-        _state.PageValues.Remove(token);
-        _state.PageMarkup[token] = (page, count, repeated) => markup(value(page, count, repeated));
+        var (order, _, value) = _state.PageTokens[token];
+        _state.PageTokens[token] = (order - PageTextOrder, true, (page, count, repeated) => markup(value(page, count, repeated)));
         return token;
     }
+    // A deferred token is 32 hexadecimal digits and this suffix; no token contains or overlaps another.
+    private const string PageTokenSuffix = "-formula";
+    private const int PageTokenDigits = 32;
+    private const long PageTextOrder = 1L << 32;
+    // A run registers a token for every record of each page-dependent value, so the tokens of a text are found by their
+    // shape and looked up, never by trying every registered token. They are replaced in the replacement order, and the
+    // text a token resolves to is searched only for tokens later in that order, as replacing every registered token in
+    // turn would leave it.
     private string ResolvePageValues(string html, int page, int count, bool repeated = false)
     {
-        // Every deferred token ends in "-formula". Ordinary object text cannot
-        // contain one without that marker, so avoid scanning all row variants.
-        // Possible tokens retain the existing ordered replacement semantics.
-        if (_state.PageValues.Count == 0 && _state.PageMarkup.Count == 0 || !html.Contains("-formula", StringComparison.Ordinal)) return html;
-        foreach (var entry in _state.PageMarkup)
-            if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, entry.Value(page, count, repeated), StringComparison.Ordinal);
-        foreach (var entry in _state.PageValues)
-            if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, ReportObjectRenderer.Encode(entry.Value(page, count, repeated)), StringComparison.Ordinal);
+        if (_state.PageTokens.Count == 0) return html;
+        SortedDictionary<long, string>? pending = null;
+        FindPageTokens(html, long.MinValue, ref pending);
+        while (pending is { Count: > 0 })
+        {
+            var token = pending.First();
+            pending.Remove(token.Key);
+            var entry = _state.PageTokens[token.Value];
+            var value = entry.Value(page, count, repeated);
+            if (!entry.Markup) value = ReportObjectRenderer.Encode(value);
+            html = html.Replace(token.Value, value, StringComparison.Ordinal);
+            FindPageTokens(value, token.Key, ref pending);
+        }
         return html;
+    }
+    private void FindPageTokens(string text, long after, ref SortedDictionary<long, string>? found)
+    {
+        var at = text.IndexOf(PageTokenSuffix, StringComparison.Ordinal);
+        if (at < 0) return;
+        var tokens = _state.PageTokens.GetAlternateLookup<ReadOnlySpan<char>>();
+        for (; at >= 0; at = text.IndexOf(PageTokenSuffix, at + PageTokenSuffix.Length, StringComparison.Ordinal))
+            if (at >= PageTokenDigits && tokens.TryGetValue(text.AsSpan(at - PageTokenDigits, PageTokenDigits + PageTokenSuffix.Length), out var token, out var entry) && entry.Order > after)
+                (found ??= new())[entry.Order] = token;
     }
 
     private bool UsesPage(CrystalFormula formula) => formula.UsesPageContext || formula.References.Any(r => DependsOn(r, true));
+    private bool? _pageCountShapesBody;
+    /// <summary>False when the total page count can reach nothing but the text of page-footer objects: no formula or
+    /// conditional format reads it (directly, through the special field, or through a custom function, whose body is not
+    /// looked at), and the TotalPageCount and PageNofM fields are placed only in page footers. The page count then decides
+    /// neither where a body section, page header or repeated group header prints nor what it prints.</summary>
+    private bool PageCountShapesBody => _pageCountShapesBody ??= PageCountReachesBody();
+    private bool PageCountReachesBody()
+    {
+        static bool IsCount(string reference) => SpecialName(reference) is "totalpagecount" or "pagenofm";
+        static bool Reads(CrystalFormula formula) => formula.UsesTotalPageCount || formula.CustomFunctions.Count > 0 || formula.References.Any(IsCount);
+        return _layout.Formulas.Values.Concat(_layout.SectionConditions.Values.SelectMany(c => c.Values))
+                .Concat(_layout.AreaConditions.Values.SelectMany(c => c.Values))
+                .Concat(_layout.ObjectConditions.Values.SelectMany(c => c.Values)).Any(Reads)
+            || _layout.Document.Sections.Where(section => section.Kind != "PageFooter").SelectMany(section => section.Elements)
+                .Any(e => IsCount(e.Binding) || e.Visual.Runs.Any(r => IsCount(r.Binding)));
+    }
     private static readonly KeyValuePair<string, CrystalFormula>[] NoConditions = [];
     // The layout's conditional formulas do not change while the session lives; each (table, id, page dependence) list is built once.
     private readonly Dictionary<(Dictionary<string, Dictionary<string, CrystalFormula>> Table, string Id, bool PageOnly), KeyValuePair<string, CrystalFormula>[]> _conditionLists = new();
@@ -550,8 +588,8 @@ public sealed partial class ReportLayoutSession
     private SubreportLinkState? _link;
     private static object?[]? Multiple(object? value) => value is string or byte[] or null or DBNull || value is not System.Collections.IEnumerable items ? null : items.Cast<object?>().ToArray();
     // SQL binds a parameter by its identifier name ("Pm-Orders.Number" binds as @PmOrdersNumber; formulas keep the Crystal name).
-    // A multi-value entry cannot bind as one value: "= @Name" becomes IN (@Name_0, ...) on a copy of the query, one value binds as
-    // itself and no value binds NULL (nothing matches, as in Crystal).
+    // A multi-value entry cannot bind as one value: "= @Name" becomes IN (@Name_0, ...) on a copy of the query (the prepared request
+    // binds it as one value past the parameter limit), one value binds as itself and no value binds NULL (nothing matches, as in Crystal).
     private static (ReportDefinition Query, Dictionary<string, object> Bound) SqlQuery(ReportDefinition query, IReadOnlyDictionary<string, object> parameters)
     {
         query.PositionedSqlSelection?.ValidateUnexpandedLists(parameters);
@@ -684,25 +722,28 @@ public sealed partial class ReportLayoutSession
                 var predicates = new List<string>();
                 if (bound.Keys.Any(k => k.StartsWith("__fxSubreport", StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidDataException("Report parameter conflicts with the reserved subreport parameter prefix.");
+                // A list link binds per member; a request past the parameter limit reads it back from one value per SQL type.
+                var links = new List<ReportSqlList>();
                 for (var index = 0; index < filters.Count; index++)
                 {
                     var key = "__fxSubreport" + index;
                     var column = $"[__fxInline].[{filters[index].Alias.Replace("]", "]]", StringComparison.Ordinal)}]";
                     if (Multiple(filters[index].Value) is { } choices)
                     {
-                        if (bound.Count + choices.Length > 2100)
-                            throw new InvalidDataException($"{element.Name}: the subreport query would bind more than 2,100 SQL parameters ({bound.Count} before the {choices.Length} values of link '{filters[index].Alias}').");
-                        for (var choice = 0; choice < choices.Length; choice++) bound[key + "_" + choice] = choices[choice] ?? DBNull.Value;
-                        predicates.Add(choices.Length == 0 ? "1 = 0" : column + " IN (" + string.Join(", ", choices.Select((_, choice) => "@" + key + "_" + choice)) + ")");
+                        var names = choices.Select((_, choice) => key + "_" + choice).ToArray();
+                        for (var choice = 0; choice < choices.Length; choice++) bound[names[choice]] = choices[choice] ?? DBNull.Value;
+                        var predicate = choices.Length == 0 ? "1 = 0" : column + " IN (" + string.Join(", ", names.Select(name => "@" + name)) + ")";
+                        predicates.Add(predicate);
+                        if (choices.Length > 1)
+                            links.Add(new ReportSqlList(key, choices.Select(choice => Convert.ToString(choice, System.Globalization.CultureInfo.InvariantCulture) ?? "").ToArray(), null, false) { Typed = choices });
                     }
                     else { bound[key] = filters[index].Value ?? DBNull.Value; predicates.Add(column + " = @" + key); }
                 }
-                if (bound.Count > 2100) throw new InvalidDataException($"{element.Name}: the subreport query would bind {bound.Count} SQL parameters; SQL Server accepts at most 2,100.");
                 var wrappedSql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates);
                 query = new ReportDefinition { Sql = wrappedSql,
                     Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout,
                     PositionedSqlSelection = query.PositionedSqlSelection?.Clone(), PositionedIntegerSelection = query.CopyIntegerSelectionForSql(wrappedSql),
-                    PositionedTextSelection = query.CopyTextSelectionForSql(wrappedSql) };
+                    PositionedTextSelection = query.CopyTextSelectionForSql(wrappedSql), SqlLists = [.. query.SqlLists, .. links] };
             }
             try { data = _executeSubreport(query, bound); }
             catch (Exception error) when (error is not OperationCanceledException && _state.TolerateSubreportQueryError?.Invoke(error) == true)

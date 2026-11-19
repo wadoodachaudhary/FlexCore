@@ -19,6 +19,7 @@ public sealed partial class CrystalFormula
     {
         public Node? Left => left;
         public Node? Right => right;
+        public Frame? Frame => frame;
         public Sides Swap() => new(frame, right, left);
         public bool LeftIsDate => IsDate(frame, left);
         public bool RightIsDate => IsDate(frame, right);
@@ -164,21 +165,64 @@ public sealed partial class CrystalFormula
 
     private static bool Same(object? left, object? right, Sides sides)
     {
-        if (left is string a && right is string b) return Equal(a, b);
+        if (left is string a && right is string b) return Equal(sides.Frame, a, b);
         if (SameDay(left, right)) return sides.RightIsDate;
         if (SameDay(right, left)) return sides.LeftIsDate;
-        return Compare(left, right) == 0;
+        return Compare(sides.Frame, left, right) == 0;
     }
-    private static bool Equal(object? left, object? right) =>
-        left is string a && right is string b ? string.Equals(a.TrimEnd(' '), b.TrimEnd(' '), StringComparison.OrdinalIgnoreCase) : Compare(left, right) == 0;
+    private static bool Equal(Frame? f, object? left, object? right) => left is string a && right is string b ? Equal(f, a, b) : Compare(f, left, right) == 0;
+    // The text a comparison reads through: two texts up to the shorter, a text compared with another kind all of it (it converts it).
+    private static long CompareText(object? left, object? right) =>
+        left is string a && right is string b ? Math.Min(a.Length, b.Length) : ((left as string)?.Length ?? 0L) + ((right as string)?.Length ?? 0L);
+    private static int Compare(Frame? f, object? left, object? right)
+    {
+        Scan(f, CompareText(left, right));
+        return Compare(left, right);
+    }
+    // A value against a range: its bounds compare with each other (Normalize) and with the value.
+    private static long RangeText(object? value, CrystalRange range) =>
+        CompareText(range.Start, range.End) + CompareText(value, range.Start) + CompareText(value, range.End);
+    // Text equals text ignoring case and trailing blanks. It reads the trailing blanks of each, and both texts only when what
+    // is left is as long in each: that much is charged.
+    private static bool Equal(Frame? f, string a, string b)
+    {
+        ReadOnlySpan<char> x = a.AsSpan().TrimEnd(' '), y = b.AsSpan().TrimEnd(' ');
+        Scan(f, a.Length - x.Length + b.Length - y.Length + (x.Length == y.Length ? 2L * x.Length : 0));
+        return x.Equals(y, StringComparison.OrdinalIgnoreCase);
+    }
     private static bool Member(object? value, object? set, Sides sides)
     {
         if (set is not CrystalRange && AsArray(set) is null && (value is CrystalRange || AsArray(value) is not null)) { (value, set) = (set, value); sides = sides.Swap(); }
-        if (set is CrystalRange range) return InRange(value, range, sides.Right);
+        if (set is CrystalRange range) return InRange(sides.Frame, value, range, sides.Right);
         if (AsArray(set) is not { } items) return Same(value, set, sides);
+        if (value is string text && items.Length >= MemberIndexLength && MemberIndex(items) is { } index)
+        {
+            Scan(sides.Frame, text.Length);
+            return index.Contains(text.TrimEnd(' '));
+        }
         foreach (var item in items)
-            if (item is CrystalRange r ? InRange(value, r, sides.Right) : Same(value, item, sides)) return true;
+            if (item is CrystalRange r ? InRange(sides.Frame, value, r, sides.Right) : Same(value, item, sides)) return true;
         return false;
+    }
+    private const int MemberIndexLength = 64;
+    // Arrays a report run holds for its whole life and never changes (its prompt values), each with the index of its text members.
+    private static readonly ConditionalWeakTable<object?[], StrongBox<HashSet<string>?>> HeldArrays = new();
+    /// <summary>Marks <paramref name="items"/> as an array no one changes again, so a long one is searched by an index for text members.</summary>
+    internal static object?[] Held(object?[] items)
+    {
+        if (items.Length >= MemberIndexLength) HeldArrays.AddOrUpdate(items, new StrongBox<HashSet<string>?>());
+        return items;
+    }
+    // Text compares with text ignoring case and trailing blanks (Equal): the index holds each member so. Null when a member is not text.
+    private static HashSet<string>? MemberIndex(object?[] items)
+    {
+        if (!HeldArrays.TryGetValue(items, out var box)) return null;
+        lock (box)
+        {
+            if (box.Value is not null) return box.Value;
+            if (!items.All(item => item is string)) { HeldArrays.Remove(items); return null; }
+            return box.Value = new HashSet<string>(items.Select(item => ((string)item!).TrimEnd(' ')), StringComparer.OrdinalIgnoreCase);
+        }
     }
     /// <summary>Crystal <c>DateTime in Date</c>: the date-time falls on that day. Any other scalar pair is a Crystal type error.</summary>
     private static bool InDay(DateTime value, DateTime day, Sides sides) =>
@@ -234,9 +278,10 @@ public sealed partial class CrystalFormula
                     answer = answer is null ? result : throw new InvalidDataException($"Crystal compares a date-time with a Date by whole days but with a DateTime exactly, and whether the bounds of {Describe(node)} are Dates or DateTimes is not known here (declare the types through CrystalFormulaContext.ReferenceType).");
         return answer!.Value;
     }
-    private static bool InRange(object? value, CrystalRange range, Node? node)
+    private static bool InRange(Frame? f, object? value, CrystalRange range, Node? node)
     {
         if (value is null or DBNull) return false;
+        Scan(f, RangeText(value, range));
         range = Normalize(range);
         return Decide(value, range, node, "in", static (_, range, edges) =>
             !(range.Start is not null && (edges.Start < 0 || edges.Start == 0 && !range.IncludeStart)) && !(range.End is not null && (edges.End > 0 || edges.End == 0 && !range.IncludeEnd)));
@@ -245,8 +290,9 @@ public sealed partial class CrystalFormula
     {
         if (left is CrystalRange && right is CrystalRange) throw new NotSupportedException("Comparing two Crystal ranges is not implemented.");
         var valueFirst = right is CrystalRange;
-        var range = Normalize((CrystalRange)(valueFirst ? right : left)!);
         var value = (valueFirst ? left : right)!;
+        Scan(sides.Frame, RangeText(value, (CrystalRange)(valueFirst ? right : left)!));
+        var range = Normalize((CrystalRange)(valueFirst ? right : left)!);
         var relation = (op, valueFirst) switch { ("<", true) or (">", false) => "before", ("<=", true) or (">=", false) => "notafter", (">", true) or ("<", false) => "after", _ => "notbefore" };
         return Decide(value, range, valueFirst ? sides.Right : sides.Left, relation, static (relation, range, edges) => relation switch
         {

@@ -4,11 +4,11 @@ namespace Fx.ControlKit.Reports;
 
 public partial class CrystalXmlReportLoader
 {
-    private static string PositionedBoundedSelectionSql(XElement report, ReportDefinition definition)
+    private static string PositionedBoundedSelectionSql(XElement report, ReportDefinition definition, string? schemaPrefix)
     {
         definition.PositionedSqlSelection = null;
         var layout = definition.PositionedLayout!;
-        var scalar = PositionedSelectionSql(report, definition);
+        var scalar = PositionedSelectionSql(report, definition, schemaPrefix);
         if (scalar.Length > 0 || layout.RecordSelection is null
             || !layout.RecordSelection.TryGetBoundedSelections(out var selections, out var residuals)) return scalar;
 
@@ -23,20 +23,20 @@ public partial class CrystalXmlReportLoader
         var integers = new List<ReportSqlIntegerSelectionPlan.Binding>();
         var texts = new List<ReportSqlTextSelectionPlan.Binding>();
 
-        (string Sql, CrystalBaseType Type, string TypeName, XElement Metadata)? Field(string reference)
+        (string Sql, CrystalBaseType Type, string TypeName, XElement Metadata, ReportTextColumn? Column)? Field(string reference)
         {
             if (ParseCrystalFieldRef(reference) is not { } parsed || !SqlSelectionIdentifier(parsed.Table) || !SqlSelectionIdentifier(parsed.Field)) return null;
             var matchedTables = tables.Where(table => string.Equals((string?)table.Attribute("Alias") ?? (string?)table.Attribute("Name"), parsed.Table, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (matchedTables.Length != 1 || matchedTables[0].Element("Command") is not null) return null;
             var fields = matchedTables[0].Element("Fields")?.Elements("Field").Where(field => string.Equals((string?)field.Attribute("Name"), parsed.Field, StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
             if (fields.Length != 1 || CrystalValueType.FromXml((string?)fields[0].Attribute("Type") ?? (string?)fields[0].Attribute("ValueType")) is not { } type) return null;
-            return ($"[{(string?)matchedTables[0].Attribute("Alias") ?? (string?)matchedTables[0].Attribute("Name")}].[{(string?)fields[0].Attribute("Name")}]", type.BaseType, (string?)fields[0].Attribute("Type") ?? (string?)fields[0].Attribute("ValueType") ?? "", fields[0]);
+            return ($"[{(string?)matchedTables[0].Attribute("Alias") ?? (string?)matchedTables[0].Attribute("Name")}].[{(string?)fields[0].Attribute("Name")}]", type.BaseType, (string?)fields[0].Attribute("Type") ?? (string?)fields[0].Attribute("ValueType") ?? "", fields[0], TextColumn(matchedTables[0], fields[0], schemaPrefix));
         }
 
         // A conjunction A AND R can safely be narrowed by A while the full
         // runtime formula still evaluates R. Accept only field/literal shapes
         // whose pure read-time behavior and metadata are explicit; the typed
-        // equalities among them join the SQL below, after the prompt terms.
+        // terms among them join the SQL below, after the prompt terms.
         foreach (var residual in residuals)
         {
             if (Field(residual.Field) is not { } field) return "";
@@ -75,7 +75,7 @@ public partial class CrystalXmlReportLoader
                 if (nativeType != CrystalBaseType.Date || declaredType != CrystalBaseType.Date || exposed[0].AllowMultiple
                     || Field(selection.Field) is not { Type: CrystalBaseType.Date or CrystalBaseType.DateTime } field) return "";
                 plan.Dates.Add(name);
-                clauses.Add(IncludeNullCandidate($"CAST({field.Sql} AS date) >= @{name}", field.Sql, layout.ConvertDatabaseNullToDefault));
+                clauses.Add(ReportSelectionSql.DateDay(field.Sql, ">=", name, layout.ConvertDatabaseNullToDefault));
                 continue;
             }
             if (nativeType == CrystalBaseType.Number && declaredType == CrystalBaseType.Number)
@@ -100,45 +100,51 @@ public partial class CrystalXmlReportLoader
                     || !formula.TryGetNullOrEmptyStringReplacement(out fieldReference, out replacement)) return "";
             }
             if (Field(fieldReference) is not { Type: CrystalBaseType.String } textField) return "";
-            var text = $"CONVERT({SelectionTextType(textField.Metadata)}, {textField.Sql})";
+            var text = $"CONVERT({ReportSelectionSql.TextType(textField.Metadata)}, {textField.Sql})";
             var index = plan.Strings.Count;
             var guard = ReportSqlSelectionPlan.ReservedPrefix + "Guard" + index;
             var constant = replacement is null ? null : ReportSqlSelectionPlan.ReservedPrefix + "Value" + index;
             if (constant is not null)
                 text = $"(CASE WHEN {textField.Sql} IS NULL OR {text} COLLATE Latin1_General_100_BIN2 = N'' THEN @{constant} ELSE {text} END)";
-            var guarded = IncludeNullCandidate($"({SelectionLengthEscape(textField.Metadata, textField.Sql)}@{guard} = 1 OR {text} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {text} COLLATE Latin1_General_100_CI_AS = @{name})",
-                textField.Sql, layout.ConvertDatabaseNullToDefault);
+            var guarded = ReportSelectionSql.StringEquality(textField.Sql, textField.Metadata, text, guard, name, layout.ConvertDatabaseNullToDefault);
             clauses.Add(guarded);
             // Printable-ASCII values compare the whole column directly at execution (no conversion, no truncation, an index can serve it)
             // when the column is a bounded character column; the null-or-empty replacement compares a CASE expression and stays guarded.
-            if (constant is null && DirectTextComparable(textField.Metadata))
-                texts.Add(new([name], guarded, IncludeNullCandidate($"{textField.Sql} = @{name}", textField.Sql, layout.ConvertDatabaseNullToDefault)));
-            plan.Strings.Add(new(name, guard, constant, replacement, exposed[0].AllowMultiple));
+            if (constant is null && ReportSelectionSql.DirectTextComparable(textField.Metadata))
+                texts.Add(new([name], guarded, ReportSelectionSql.DirectEquality(textField.Sql, name, layout.ConvertDatabaseNullToDefault)) { Column = textField.Column });
+            plan.Strings.Add(new(name, guard, constant, replacement, exposed[0].AllowMultiple, guarded,
+                ReportSelectionSql.StringMembership(textField.Sql, textField.Metadata, text, guard, name, layout.ConvertDatabaseNullToDefault)));
         }
-        // Crystal writes the record selection's typed literal equalities into its
-        // own query, so they narrow the SQL here too; the full formula still decides
-        // every returned row. The empty-string "greater than" stays on the runtime
-        // side, where Crystal leaves it as well.
+        // Crystal writes the record selection's typed literal terms into its own
+        // query, so they narrow the SQL here too; the full formula still decides
+        // every returned row. "Greater than the empty string" is sent as a superset:
+        // it drops only NULL and '', which fail in either null mode, and DATALENGTH
+        // keeps blank-only values, which SQL's own "> ''" would drop.
         foreach (var residual in residuals)
         {
-            if (residual.Operator != "=" || Field(residual.Field) is not { } field) continue;
+            if (Field(residual.Field) is not { } field) continue;
+            if (residual.Operator == ">" && field.Type == CrystalBaseType.String && residual.Literal is string { Length: 0 } empty)
+            {
+                clauses.Add(ReportSelectionSql.StringOrder(field.Sql, ">", empty)!);
+                continue;
+            }
+            if (residual.Operator != "=") continue;
             if (residual.Literal is string text)
             {
                 // A literal outside printable ASCII is as uncertain as a guarded prompt value: the runtime compares it.
                 if (text.Any(character => character is < ' ' or > '~')) continue;
-                var column = $"CONVERT({SelectionTextType(field.Metadata)}, {field.Sql})";
+                var column = $"CONVERT({ReportSelectionSql.TextType(field.Metadata)}, {field.Sql})";
                 var literal = ReportSqlSelectionPlan.ReservedPrefix + "Literal" + plan.Literals.Count;
                 plan.Literals.Add((literal, text));
-                var guarded = IncludeNullCandidate($"({SelectionLengthEscape(field.Metadata, field.Sql)}{column} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {column} COLLATE Latin1_General_100_CI_AS = @{literal})",
-                    field.Sql, layout.ConvertDatabaseNullToDefault);
+                var guarded = ReportSelectionSql.StringEquality(field.Sql, field.Metadata, column, null, literal, layout.ConvertDatabaseNullToDefault);
                 clauses.Add(guarded);
-                if (DirectTextComparable(field.Metadata))
-                    texts.Add(new([literal], guarded, IncludeNullCandidate($"{field.Sql} = @{literal}", field.Sql, layout.ConvertDatabaseNullToDefault)));
+                if (ReportSelectionSql.DirectTextComparable(field.Metadata))
+                    texts.Add(new([literal], guarded, ReportSelectionSql.DirectEquality(field.Sql, literal, layout.ConvertDatabaseNullToDefault)) { Column = field.Column });
             }
             else if (residual.Literal is bool flag)
-                clauses.Add(IncludeNullCandidate($"{field.Sql} = {(flag ? 1 : 0)}", field.Sql, layout.ConvertDatabaseNullToDefault));
+                clauses.Add(ReportSelectionSql.Boolean(field.Sql, flag, layout.ConvertDatabaseNullToDefault));
             else if (residual.Literal is decimal number)
-                clauses.Add(IncludeNullCandidate($"{field.Sql} = {number.ToString("0", System.Globalization.CultureInfo.InvariantCulture)}", field.Sql, layout.ConvertDatabaseNullToDefault));
+                clauses.Add(ReportSelectionSql.Integral(field.Sql, "=", number, layout.ConvertDatabaseNullToDefault)!);
         }
         // Inline literals need no plan; a plan exists only when execution must bind prompt values or reserved names.
         if (plan.Dates.Count + plan.Integers.Count + plan.Strings.Count + plan.Literals.Count > 0) definition.PositionedSqlSelection = plan;

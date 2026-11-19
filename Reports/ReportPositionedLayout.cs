@@ -161,6 +161,8 @@ public sealed partial class ReportLayoutSession
         public int Cursor { get; set; }
         public int BodyStart { get; set; }
         public int Bottom { get; set; }
+        /// <summary>The room the page kept for its page footers when it was opened.</summary>
+        public int FooterReserve { get; init; }
         public bool HasBody { get; set; }
         public bool HasHeaders { get; set; }
         public bool EndsWithReportHeaderBreak { get; set; }
@@ -1359,6 +1361,10 @@ public sealed partial class ReportLayoutSession
     private sealed record PaginationRetry(int Pages, int Attempt, IReadOnlyList<int>? Counts,
         Dictionary<Band, (int Page, int Count)>? Inline, IReadOnlyList<int>? Footers, int ScheduleAttempt);
 
+    // Checks only: repeat every pass the settle test would accept, as before that test existed, and count the passes.
+    private bool _forceSettleRepeat = false;
+    private int _paginationPasses;
+
     public ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights = null)
     {
         var next = new PaginationRetry(1, 0, null, null, null, 0);
@@ -1375,6 +1381,7 @@ public sealed partial class ReportLayoutSession
         Dictionary<Band, (int Page, int Count)>? inlineContexts, IReadOnlyList<int>? footerRows, int scheduleAttempt, out PaginationRetry? retry)
     {
         retry = null;
+        _paginationPasses++;
         if (_textMetrics is null && Measurements.Count > 0 && _state.HasGrowingText && (measuredHeights is null || measuredHeights.Count != Measurements.Count))
             _diagnostics.Add("Browser text measurement is unavailable; CanGrow pagination uses an approximate font metric.");
         var size = _layout.Document.Page;
@@ -1809,7 +1816,10 @@ public sealed partial class ReportLayoutSession
         var inlineChanged = nextInlineContexts.Any(pair => inlineContexts is null || !inlineContexts.TryGetValue(pair.Key, out var context) || context != pair.Value);
         var nextFooterRows = pages.Select(p => p.Placements.LastOrDefault(p => p.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1).ToArray();
         var footerChanged = footers.Count > 0 && (footerRows is null || !nextFooterRows.SequenceEqual(footerRows));
-        if (footerChanged || _state.HasPageConditions && (inlineChanged || pages.Count != expectedPages || expectedCounts is null || !counts.SequenceEqual(expectedCounts)))
+        // The page footers of each page for its final last record and page count, kept from the settle test for the placement below.
+        Band[]?[]? settledFooters = null;
+        if ((footerChanged || _state.HasPageConditions && (inlineChanged || pages.Count != expectedPages || expectedCounts is null || !counts.SequenceEqual(expectedCounts)))
+            && !SettledWithoutRepeat())
         {
             if (attempt >= 7) _diagnostics.Add("Page-dependent formatting did not stabilize within eight passes; the last computed layout is retained.");
             else { retry = new(pages.Count, attempt + 1, counts, nextInlineContexts, nextFooterRows, scheduleAttempt); return new([], []); }
@@ -1823,9 +1833,9 @@ public sealed partial class ReportLayoutSession
                 && current.Placements.Where(p => !p.Band.Suppressed).All(p => p.Band.Section.Kind == "ReportHeader"
                     && p.Offset == 0 && p.Height >= Height(p.Band)))) continue;
             var footerTop = current.Bottom;
-            foreach (var section in footers)
+            for (var f = 0; f < footers.Count; f++)
             {
-                var footer = Blankness(FurnitureBand(section.Id, lastRow, current.Number, counts[index], index + 1), index + 1);
+                var footer = settledFooters?[index]?[f] ?? Blankness(FurnitureBand(footers[f].Id, lastRow, current.Number, counts[index], index + 1), index + 1);
                 if (footer.Blank && !_state.PhysicalSchedule) continue;
                 current.Placements.Add(new(footer, footerTop, 0, Height(footer), int.MaxValue)); footerTop += Space(footer);
             }
@@ -2423,6 +2433,28 @@ public sealed partial class ReportLayoutSession
             breakNow |= band.Section.NewPageAfter || area?.NewPageAfter == true;
             resetPageNumber |= band.Section.ResetPageNumberAfter || area?.ResetPageNumberAfter == true;
         }
+        // A pass is repeated with the page counts and page-footer records it found, because the next pass may lay the report out
+        // differently with them. It cannot where the pass read neither: the page count prints only in page footers (PageCountShapesBody),
+        // which are formatted after the pass with the final counts, and every page kept exactly the room its footers take for its
+        // final last record and count. The repeat would then open every page with the same room and place the same bands, so this
+        // pass is the settled one. Subreports (built as their sections print, and positioned by page) and the physical replay
+        // keep the repeat.
+        bool SettledWithoutRepeat()
+        {
+            if (_forceSettleRepeat || _state.PhysicalSchedule || _state.Sessions.Count != 1 || _layout.Subreports.Count != 0 || nextInlineContexts.Count != 0
+                || _state.HasPageConditions && PageCountShapesBody) return false;
+            var built = new Band[]?[pages.Count];
+            for (var index = 0; index < pages.Count && footers.Count > 0; index++)
+            {
+                var bands = built[index] = new Band[footers.Count];
+                var reserve = 0;
+                for (var f = 0; f < footers.Count; f++)
+                    reserve += Space(bands[f] = Blankness(FurnitureBand(footers[f].Id, nextFooterRows[index], pages[index].Number, counts[index], index + 1), index + 1));
+                if (reserve != pages[index].FooterReserve) return false;
+            }
+            settledFooters = built;
+            return true;
+        }
         // Page furniture and repeated headers: a blank "Suppress Blank Section" band takes no space, but the physical replay still formats it.
         Band Blankness(Band band, int physicalPage = 0)
         {
@@ -2476,7 +2508,7 @@ public sealed partial class ReportLayoutSession
             var number = resetPageNumber || pages.Count == 0 ? 1 : pages[^1].Number + 1;
             var footerRow = footerRows is not null && pages.Count < footerRows.Count ? footerRows[pages.Count] : row;
             var reserve = footers.Sum(section => Space(Blankness(FurnitureBand(section.Id, footerRow, number, ExpectedCount(pages.Count), pages.Count + 1), pages.Count + 1)));
-            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve };
+            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve, FooterReserve = reserve };
             resetPageNumber = false;
             if (withHeaders) AddHeaders(next, row);
             if (next.Cursor >= next.Bottom)

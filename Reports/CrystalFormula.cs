@@ -53,6 +53,8 @@ public sealed partial class CrystalFormula
     public CrystalEvaluationTime? EvaluationTime { get; }
     public IReadOnlyList<string> EvaluateAfter { get; }
     public bool UsesPageContext { get; }
+    /// <summary>True when the formula itself reads the total page count (TotalPageCount or PageNofM).</summary>
+    public bool UsesTotalPageCount { get; }
     public bool UsesGridContext { get; }
     public bool UsesAggregates { get; }
     /// <summary>True when an aggregate names a group (Sum ({x}, {group}) or a group condition); one with the field alone is over the whole report.</summary>
@@ -99,6 +101,7 @@ public sealed partial class CrystalFormula
             throw new InvalidDataException("EvaluateAfter requires one formula reference.");
         EvaluateAfter = after.Select(n => ((Reference)n.Args[0]).Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         UsesPageContext = symbols.Overlaps(["pagenumber", "totalpagecount", "pagenofm", "inrepeatedgroupheader"]);
+        UsesTotalPageCount = symbols.Overlaps(["totalpagecount", "pagenofm"]);
         var aggregates = calls.Where(IsAggregate).ToArray();
         UsesAggregates = aggregates.Length > 0;
         UsesGroupedAggregates = aggregates.Any(n => n.Args.Length > 1);

@@ -25,7 +25,24 @@ public interface IReportDataExecutor
     /// (the implementation prepends one if its database needs it).
     /// </param>
     DataTable Execute(string sql, IDictionary<string, object>? parameters);
+
+    /// <summary>
+    /// True when every text column the executor's databases hold compares case-insensitively. A record selection then compares
+    /// such a column with printable-ASCII values directly, in the column's own collation; otherwise it keeps the explicit
+    /// case-insensitive comparison, which finds the same rows under any collation.
+    /// </summary>
+    bool TextColumnsCompareCaseInsensitively => false;
+
+    /// <summary>
+    /// True when <paramref name="column"/>, a column of a table or view in the connected database, compares case-insensitively as
+    /// <see cref="TextColumnsCompareCaseInsensitively"/> describes. A record selection compares only such a column directly.
+    /// </summary>
+    bool TextColumnComparesCaseInsensitively(ReportTextColumn column) => TextColumnsCompareCaseInsensitively;
 }
+
+/// <summary>A column a record selection compares: the table or view as the query names it (with its schema when it names one)
+/// and the column's name.</summary>
+public sealed record ReportTextColumn(string? Schema, string Table, string Column);
 
 /// <summary>Optional structured execution for hosts that supply report-specific data fixtures.</summary>
 public interface IReportDefinitionDataExecutor : IReportDataExecutor
@@ -38,4 +55,17 @@ public interface IReportDefinitionDataExecutor : IReportDataExecutor
 public interface IAsyncReportDataExecutor : IReportDataExecutor
 {
     Task<DataTable> ExecuteAsync(string sql, IDictionary<string, object>? parameters, CancellationToken cancellationToken);
+}
+
+/// <summary>What the data executor declares about its databases when a report definition prepares its SQL.</summary>
+/// <param name="CaseInsensitiveTextColumns">Every text column compares case-insensitively (see <see cref="IReportDataExecutor.TextColumnsCompareCaseInsensitively"/>).</param>
+public sealed record ReportSqlExecutionOptions(bool CaseInsensitiveTextColumns)
+{
+    /// <summary>Which columns compare case-insensitively (see <see cref="IReportDataExecutor.TextColumnComparesCaseInsensitively"/>).
+    /// Null: every column of a table or view does when <see cref="CaseInsensitiveTextColumns"/> is true.</summary>
+    public Func<ReportTextColumn, bool>? CaseInsensitiveColumn { get; init; }
+
+    /// <summary>The options a data executor declares.</summary>
+    public static ReportSqlExecutionOptions For(IReportDataExecutor executor) =>
+        new(executor.TextColumnsCompareCaseInsensitively) { CaseInsensitiveColumn = executor.TextColumnComparesCaseInsensitively };
 }

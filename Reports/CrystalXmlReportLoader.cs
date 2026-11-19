@@ -260,7 +260,7 @@ public partial class CrystalXmlReportLoader
             definition.PositionedLayout.UseVisualExportHeaders = _options.VisualDetailExports.Contains(definition.ReportId);
             var projections = definition.PositionedLayout.Projections;
             definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
+                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition, _options.SchemaPrefix), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
                     useDistinct: Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords"));
             if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
             if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
@@ -1139,7 +1139,8 @@ public partial class CrystalXmlReportLoader
             // alone — fall back to the host's name-based lookup instead.
             var looksLikeBaseTable = !string.IsNullOrEmpty(bindingTable)
                 && bindingTable.StartsWith("tbl", StringComparison.OrdinalIgnoreCase);
-            if (pickListSql == null && looksLikeBaseTable && !string.IsNullOrEmpty(bindingField))
+            var inferPickList = pickListSql == null && looksLikeBaseTable && !string.IsNullOrEmpty(bindingField);
+            if (inferPickList)
             {
                 pickListSql = SynthesizePickListSql(bindingTable, bindingField, bindingDescField, tableFields);
             }
@@ -1169,6 +1170,7 @@ public partial class CrystalXmlReportLoader
                 DefaultValues = defaultValues,
                 PickListSql = pickListSql,
                 PickListIsAuthored = pickListIsAuthored,
+                PickListIsInferred = inferPickList,
                 BindingTable = bindingTable,
                 BindingField = bindingField,
                 BindingDescriptionField = bindingDescField

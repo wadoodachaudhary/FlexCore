@@ -469,12 +469,10 @@ else
     // drives the Refresh button and ReportFilePath-aware features.
     private string ReportFilePath = "";
 
-    // Captured BEFORE multi-value rewrite so the "Parameters" toolbar
-    // button can re-prompt with the user's prior selections intact.
+    // Only answers accepted in a dialog for this launch, in their original types.
     private Dictionary<string, object>? _lastPromptedValues;
 
-    // Caller-supplied / session-injected parameters merged into every
-    // ShowReportAsync run (e.g. DivisionID).
+    // Caller-supplied launch values, including values the report uses only in SQL.
     private readonly Dictionary<string, string> _seedParameters = new(StringComparer.OrdinalIgnoreCase);
     // "Default:<name>" seeds pre-select a prompt without answering it: the dialog still shows the parameter (FMain's job context).
     private readonly Dictionary<string, string> _seedDefaults = new(StringComparer.OrdinalIgnoreCase);
@@ -1452,7 +1450,7 @@ else
             {
                 try
                 {
-                    treeData = db.Execute(definition.TreeSql, sqlParams.Count > 0 ? sqlParams : null);
+                    treeData = ExecuteTreeData(definition, sqlParams);
                     Logger.LogInformation("Tree SQL returned {Rows} hierarchy rows", treeData.Rows.Count);
                 }
                 catch (Exception treeEx)
@@ -1597,14 +1595,20 @@ else
     /// <summary>
     /// Load and render a report by path (.rpt or .xml). Prompts the
     /// user for any required parameters not supplied via
-    /// <paramref name="seedParameters"/>. Configured session parameters provide
-    /// fallback defaults without hiding required authored prompts.
+    /// <paramref name="seedParameters"/> or the current session. The toolbar reopens the authored inputs.
     /// </summary>
     public Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
-        => RunReportAsync(file, seedParameters, isRefresh: false);
+        => RunReportAsync(file, seedParameters, PromptAction.Open);
 
-    private async Task RunReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters, bool isRefresh)
+    private async Task RunReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters, PromptAction action)
     {
+        if (action == PromptAction.Open || _parameterDefinition is null) _seedParameters.Clear();
+        if (action == PromptAction.Open)
+        {
+            _seedDefaults.Clear();
+            _seedFieldFilters.Clear();
+            _lastPromptedValues = null;
+        }
         _parameterDefinition = null;
         _parameterPromptOpen = false;
         StopPrint();
@@ -1617,23 +1621,11 @@ else
         {
             IsLoading = true;
             _loadGeneration++;
-            var previousFile = ReportFilePath;
             ReportFilePath = file;
             await OnPageTitleChanged.InvokeAsync(Path.GetFileNameWithoutExtension(file));
             SetViewerStatus(shown, $"Loading report: {file}");
             await InvokeAsync(StateHasChanged);
 
-            // "Filter:Table.Field" seeds become ReportFieldFilters, not Crystal
-            // parameters. A refresh re-enters here with the stripped dict, so
-            // existing filters survive unless the file changed or the caller
-            // supplied a fresh filter set.
-            var incomingFilters = seedParameters != null
-                && seedParameters.Keys.Any(k => k.StartsWith("Filter:", StringComparison.OrdinalIgnoreCase));
-            if (incomingFilters || !string.Equals(file, previousFile, StringComparison.OrdinalIgnoreCase))
-                _seedFieldFilters.Clear();
-
-            _seedParameters.Clear();
-            _seedDefaults.Clear();
             if (seedParameters != null)
                 foreach (var kv in seedParameters)
                     if (!string.IsNullOrEmpty(kv.Value))
@@ -1670,7 +1662,7 @@ else
                 var definition = UsePositionedLayout ? XmlLoader.LoadPositioned(xmlPath) : _seedFieldFilters.Count > 0
                     ? XmlLoader.LoadWithFieldFilters(xmlPath, _seedFieldFilters)
                     : XmlLoader.Load(xmlPath);
-                var promptDefinition = new ParameterPromptDefinition(definition.Sql, definition.Parameters.ToArray());
+                var promptDefinition = definition.Parameters.ToArray();
                 _parameterDefinition = promptDefinition;
                 var typedParams = _seedParameters
                     .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase))
@@ -1692,17 +1684,18 @@ else
                         typedParams[multiName] = multiValues;
                 }
 
-                // Configured session keys are supplied context, not editable report defaults.
-                // Resolve them afresh before prompting so saved RPT values cannot select another scope.
+                // Session context stays supplied on every run, even when the initial caller supplied it.
+                if (action != PromptAction.Open)
+                    foreach (var name in Options.SessionAutoInjectParameters.Where(IsSuppliedSessionParameter))
+                        typedParams.Remove(name);
                 List<KeyValuePair<string, string>>? readOnlyValues =
-                    isRefresh && ReadOnlySessionParametersOnRefresh.Count > 0 ? [] : null;
+                    action == PromptAction.Refresh && ReadOnlySessionParametersOnRefresh.Count > 0 ? [] : null;
                 AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters, authoredDefaults: false, readOnlyValues: readOnlyValues);
-                var missingRequired = definition.Parameters
-                    .Where(p => p.IsInUse && (p.Required || PromptOptionalParameters)
-                        && !typedParams.ContainsKey(p.Name))
+                var prompts = promptDefinition.Where(p => CanPrompt(p) && (action == PromptAction.Open
+                        ? !typedParams.ContainsKey(p.Name) : !IsSuppliedSessionParameter(p.Name)))
                     .ToList();
 
-                if ((missingRequired.Count > 0 || readOnlyValues is { Count: > 0 }) && _paramDialog != null)
+                if ((prompts.Count > 0 || readOnlyValues is { Count: > 0 }) && _paramDialog != null)
                 {
                     _parameterPromptOpen = true;
                     SetViewerStatus(shown, "Waiting for parameter values...");
@@ -1719,7 +1712,8 @@ else
                     if (_lastPromptedValues != null)
                         foreach (var kv in _lastPromptedValues) initialValues[kv.Key] = kv.Value;
                     Dictionary<string, object>? userValues;
-                    try { userValues = await _paramDialog.PromptWithReadOnlyValuesAsync(title, missingRequired, initialValues, promptContext, PromptOptionalParameters, readOnlyValues ?? []); }
+                    try { userValues = await _paramDialog.PromptForValuesAsync(title, prompts, initialValues, promptContext,
+                        PromptOptionalParameters, readOnlyValues ?? [], action == PromptAction.Open ? null : typedParams); }
                     finally { _parameterPromptOpen = false; }
                     if (userValues == null)
                     {
@@ -1727,7 +1721,10 @@ else
                         return;
                     }
                     foreach (var kv in userValues)
+                    {
                         typedParams[kv.Key] = kv.Value;
+                        (_lastPromptedValues ??= new(StringComparer.OrdinalIgnoreCase))[kv.Key] = kv.Value;
+                    }
 
                     IsLoading = true;
                     _loadGeneration++;
@@ -1738,9 +1735,6 @@ else
                 // Headless/session-only parameters retain their existing SQL fallback. Never
                 // replace an explicit seed or a value accepted from the interactive prompt.
                 AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters);
-
-                // Snapshot pre-rewrite values for the "Parameters" re-prompt.
-                _lastPromptedValues = new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase);
 
                 // Multi-value rewrite: string[] entries become IN (@N_0, @N_1, ...).
                 var multiSelections = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
@@ -1933,22 +1927,14 @@ else
     private async Task ChromeOnRefresh()
     {
         if (string.IsNullOrEmpty(ReportFilePath)) return;
-        // Owner directive 2026-08-30: Refresh INTENTIONALLY re-prompts for
-        // parameters (passing _seedParameters itself lets ShowReportAsync's
-        // clear-then-copy empty it) so the user can run the report with
-        // different values. Do not "fix" this by passing a copy.
         _defaultZoomLevel = ZoomLevel;
-        await RunReportAsync(ReportFilePath, _seedParameters, isRefresh: true);
+        await RunReportAsync(ReportFilePath, null, PromptAction.Refresh);
     }
 
     private async Task ChromeOnEditParameters()
     {
         if (!CanEditParameters) return;
-        // Re-run with no pre-seeded values — the dialog re-opens with
-        // the user's last selections (we cached them in _lastPromptedValues).
-        _seedParameters.Clear();
-        _seedDefaults.Clear();
-        await ShowReportAsync(ReportFilePath, null);
+        await RunReportAsync(ReportFilePath, null, PromptAction.Edit);
     }
 
     private async Task ChromeOnSearchKeyDown(KeyboardEventArgs e)
@@ -3662,10 +3648,18 @@ else
         if (parameters is not null) parameters = ReportRangeParameters.BindSql(new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase));
         // A selection with reserved bindings (guards, literals) needs a dictionary even when the report has no prompts.
         if (definition.PositionedSqlSelection is not null) parameters ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-        var execution = definition.PrepareSqlExecution(parameters);
+        var execution = definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db));
         if (execution.Sql != definition.Sql)
             LogQuery("Prepared report execution", execution.Sql, parameters ?? new Dictionary<string, object>());
         return db is IReportDefinitionDataExecutor structured ? structured.Execute(execution, parameters) : db.Execute(execution.Sql, parameters);
+    }
+
+    // The hierarchy query binds what the main query binds, fitted to the server as that request is.
+    private System.Data.DataTable ExecuteTreeData(ReportDefinition definition, Dictionary<string, object> sqlParams)
+    {
+        if (sqlParams.Count == 0) return db.Execute(definition.TreeSql, null);
+        var parameters = new Dictionary<string, object>(sqlParams, StringComparer.OrdinalIgnoreCase);
+        return db.Execute(definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db)).TreeSql, parameters);
     }
 
     private void GuardRowLimit(System.Data.DataTable dt)

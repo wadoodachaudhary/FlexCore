@@ -33,6 +33,14 @@
                                           OnClick="RefreshAsync"
                                           Disabled="@Busy" />
 
+                    @if (ActiveWorkspaceMode == TelemetryWorkspaceMode.Observability && _selectedTab == 0)
+                    {
+                        <ToolbarButtonControl Label="Find... (Ctrl+F)"
+                                              Title="Find logs in the grid by text or wildcard across columns"
+                                              Tag="fx-tel-find-logs"
+                                              OnClick="() => _logControl?.OpenFindDialog()" />
+                    }
+
                     @if (ToolbarActions is not null)
                     {
                         @ToolbarActions
@@ -84,20 +92,32 @@
             </ToolbarControl>
 
             <div class="fx-tel-filter-bar">
-                @if (EnableProductAnalytics)
+                @if (EnableProductAnalytics || HasCustomTabs)
                 {
                     <div class="fx-tel-filter-item">
+                        <label class="fx-tel-filter-label">Section</label>
                         <div class="fx-tel-mode-switch" role="group" aria-label="Telemetry Workspace Mode">
                             <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.Observability)"
                                            Tag="fx-tel-mode-observability"
                                            OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.Observability)">
-                                Observability
+                                Logs &amp; Telemetry
                             </ButtonControl>
-                            <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)"
-                                           Tag="fx-tel-mode-product"
-                                           OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.ProductAnalytics)">
-                                Product Analytics
-                            </ButtonControl>
+                            @if (EnableProductAnalytics)
+                            {
+                                <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics)"
+                                               Tag="fx-tel-mode-product"
+                                               OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.ProductAnalytics)">
+                                    Product Analytics
+                                </ButtonControl>
+                            }
+                            @if (HasCustomTabs)
+                            {
+                                <ButtonControl CssClass="@PillCss(ActiveWorkspaceMode == TelemetryWorkspaceMode.CustomTabs)"
+                                               Tag="fx-tel-mode-custom"
+                                               OnClick="() => SwitchWorkspaceModeAsync(TelemetryWorkspaceMode.CustomTabs)">
+                                    @CustomWorkspaceLabel
+                                </ButtonControl>
+                            }
                         </div>
                     </div>
                 }
@@ -239,7 +259,141 @@
                                            ProductSnapshot="@_productSnapshot" />
                 }
             }
+            else if (ActiveWorkspaceMode == TelemetryWorkspaceMode.CustomTabs && AdditionalTabs is not null)
+            {
+                if (_selectedTab >= 0 && _selectedTab < AdditionalTabs.Count)
+                {
+                    var customTab = AdditionalTabs[_selectedTab];
+                    var ctx = new TelemetryCustomTabContext(
+                        ActiveTheme,
+                        EffectiveTenant,
+                        _searchText,
+                        _selectedDays,
+                        _selectedMinutesBack,
+                        _snapshot);
+                    @customTab.Content(ctx)
+                }
+            }
             else if (_selectedTab == 0 && _snapshot is not null)
+            {
+                <LogControl @ref="_logControl"
+                            Theme="@ActiveTheme"
+                            Snapshot="@_snapshot"
+                            Tenant="@EffectiveTenant"
+                            SearchText="@_searchText"
+                            ExternalHistogramSeries="@_timeSeriesHistogramSeries"
+                            ShowChrome="false" />
+            }
+            else if (_selectedTab == 1)
+            {
+                <SqlTelemetryControl @ref="_sqlControl"
+                                     Theme="@ActiveTheme"
+                                     Tenant="@EffectiveTenant"
+                                     SearchText="@_searchText"
+                                     RefreshVersion="@_refreshVersion" />
+            }
+            else if (_selectedTab == 2 && _snapshot is not null)
+            {
+                <ControlActivityControl @ref="_controlActivity"
+                                        Theme="@ActiveTheme"
+                                        Snapshot="@_snapshot" />
+            }
+            else if (_selectedTab == 3 && _snapshot is not null)
+            {
+                <div class="fx-tel-grid-pane">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(_screenSubMode == "Screens")"
+                                           Tag="fx-tel-sub-screens"
+                                           OnClick='() => _screenSubMode = "Screens"'>
+                                Screens &amp; Forms (@FilteredScreenRows.Count)
+                            </ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_screenSubMode == "TasksReports")"
+                                           Tag="fx-tel-sub-tasks"
+                                           OnClick='() => _screenSubMode = "TasksReports"'>
+                                Tasks, Reports &amp; Inquiries (@FilteredTaskRows.Count)
+                            </ButtonControl>
+                        </div>
+
+                        <div class="fx-tel-pill-group">
+                            <span class="fx-tel-subbar-label">Usage Filter:</span>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "All")" Tag="fx-tel-st-all" OnClick='() => _usageStatusFilter = "All"'>All</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Unused")" Tag="fx-tel-st-unused" OnClick='() => _usageStatusFilter = "Unused"'>Unused (0)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Rare")" Tag="fx-tel-st-rare" OnClick='() => _usageStatusFilter = "Rare"'>Rarely Used</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Active")" Tag="fx-tel-st-active" OnClick='() => _usageStatusFilter = "Active"'>Active</ButtonControl>
+                        </div>
+                    </div>
+
+                    <div class="fx-tel-grid-host">
+                        @if (_screenSubMode == "Screens")
+                        {
+                            <GridControl TValue="FlexTelemetryScreenRow"
+                                         Tag="fx-grid-screens"
+                                         DataSource="@FilteredScreenRows"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ScreenTitle)" HeaderText="Screen / Function" Width="245px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Module)" HeaderText="Module" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UsageStatus)" HeaderText="Status" Width="135px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (FlexTelemetryScreenRow)context;
+                                            }
+                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.OpenCount)" HeaderText="Opens" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.FocusCount)" HeaderText="Tab Focuses" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ControlActionsOnScreen)" HeaderText="Control Actions" Width="110px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.GridOpsOnScreen)" HeaderText="Grid Ops" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UniqueUsers)" HeaderText="Users" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.TotalDwellMinutes)" HeaderText="Total Min" Width="90px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.AvgDwellSeconds)" HeaderText="Avg Sec" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.LastUsedLocal)" HeaderText="Last Used" Width="145px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Route)" HeaderText="Route" Width="175px" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                        else
+                        {
+                            <GridControl TValue="FlexTelemetryTaskRow"
+                                         Tag="fx-grid-tasks"
+                                         DataSource="@FilteredTaskRows"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.KindLabel)" HeaderText="Type" Width="95px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Name)" HeaderText="Task / Report / Inquiry Name" Width="300px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Module)" HeaderText="Module" Width="190px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UsageStatus)" HeaderText="Status" Width="140px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (FlexTelemetryTaskRow)context;
+                                            }
+                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.RunCount)" HeaderText="Executions" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UniqueUsers)" HeaderText="Users" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.LastRunLocal)" HeaderText="Last Executed" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                    </div>
+                </div>
+            }
+            else if (_selectedTab == 4 && _snapshot is not null)
             {
                 <div class="fx-tel-scroll-pane">
                     <div class="fx-tel-kpi-grid">
@@ -479,139 +633,6 @@
                     </div>
                 </div>
             }
-            else if (_selectedTab == 1 && _snapshot is not null)
-            {
-                <ControlActivityControl @ref="_controlActivity"
-                                        Theme="@ActiveTheme"
-                                        Snapshot="@_snapshot" />
-            }
-            else if (_selectedTab == 2 && _snapshot is not null)
-            {
-                <div class="fx-tel-grid-pane">
-                    <div class="fx-tel-subbar">
-                        <div class="fx-tel-pill-group">
-                            <ButtonControl CssClass="@PillCss(_screenSubMode == "Screens")"
-                                           Tag="fx-tel-sub-screens"
-                                           OnClick='() => _screenSubMode = "Screens"'>
-                                Screens &amp; Forms (@FilteredScreenRows.Count)
-                            </ButtonControl>
-                            <ButtonControl CssClass="@PillCss(_screenSubMode == "TasksReports")"
-                                           Tag="fx-tel-sub-tasks"
-                                           OnClick='() => _screenSubMode = "TasksReports"'>
-                                Tasks, Reports &amp; Inquiries (@FilteredTaskRows.Count)
-                            </ButtonControl>
-                        </div>
-
-                        <div class="fx-tel-pill-group">
-                            <span class="fx-tel-subbar-label">Usage Filter:</span>
-                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "All")" Tag="fx-tel-st-all" OnClick='() => _usageStatusFilter = "All"'>All</ButtonControl>
-                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Unused")" Tag="fx-tel-st-unused" OnClick='() => _usageStatusFilter = "Unused"'>Unused (0)</ButtonControl>
-                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Rare")" Tag="fx-tel-st-rare" OnClick='() => _usageStatusFilter = "Rare"'>Rarely Used</ButtonControl>
-                            <ButtonControl CssClass="@PillCss(_usageStatusFilter == "Active")" Tag="fx-tel-st-active" OnClick='() => _usageStatusFilter = "Active"'>Active</ButtonControl>
-                        </div>
-                    </div>
-
-                    <div class="fx-tel-grid-host">
-                        @if (_screenSubMode == "Screens")
-                        {
-                            <GridControl TValue="FlexTelemetryScreenRow"
-                                         Tag="fx-grid-screens"
-                                         DataSource="@FilteredScreenRows"
-                                         AllowSorting="true"
-                                         AllowFiltering="true"
-                                         AllowResizing="true"
-                                         AllowSelection="true"
-                                         EnableHover="true"
-                                         Height="100%"
-                                         WidthMode="GridWidthMode.FillAvailable">
-                                <GridColumnsBase>
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ScreenTitle)" HeaderText="Screen / Function" Width="245px" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Module)" HeaderText="Module" Width="170px" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UsageStatus)" HeaderText="Status" Width="135px" AllowEditing="false">
-                                        <Template>
-                                            @{
-                                                var r = (FlexTelemetryScreenRow)context;
-                                            }
-                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
-                                        </Template>
-                                    </GridColumn>
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.OpenCount)" HeaderText="Opens" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.FocusCount)" HeaderText="Tab Focuses" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.ControlActionsOnScreen)" HeaderText="Control Actions" Width="110px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.GridOpsOnScreen)" HeaderText="Grid Ops" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.UniqueUsers)" HeaderText="Users" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.TotalDwellMinutes)" HeaderText="Total Min" Width="90px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.AvgDwellSeconds)" HeaderText="Avg Sec" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.LastUsedLocal)" HeaderText="Last Used" Width="145px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryScreenRow.Route)" HeaderText="Route" Width="175px" AllowEditing="false" />
-                                </GridColumnsBase>
-                            </GridControl>
-                        }
-                        else
-                        {
-                            <GridControl TValue="FlexTelemetryTaskRow"
-                                         Tag="fx-grid-tasks"
-                                         DataSource="@FilteredTaskRows"
-                                         AllowSorting="true"
-                                         AllowFiltering="true"
-                                         AllowResizing="true"
-                                         AllowSelection="true"
-                                         EnableHover="true"
-                                         Height="100%"
-                                         WidthMode="GridWidthMode.FillAvailable">
-                                <GridColumnsBase>
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.KindLabel)" HeaderText="Type" Width="95px" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Name)" HeaderText="Task / Report / Inquiry Name" Width="300px" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.Module)" HeaderText="Module" Width="190px" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UsageStatus)" HeaderText="Status" Width="140px" AllowEditing="false">
-                                        <Template>
-                                            @{
-                                                var r = (FlexTelemetryTaskRow)context;
-                                            }
-                                            <BadgeControl Variant="@StatusBadgeVariant(r.UsageStatus)" Size="BadgeSize.Small" Text="@r.UsageStatus" />
-                                        </Template>
-                                    </GridColumn>
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.RunCount)" HeaderText="Executions" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.UniqueUsers)" HeaderText="Users" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
-                                    <GridColumn Field="@nameof(FlexTelemetryTaskRow.LastRunLocal)" HeaderText="Last Executed" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm" AllowEditing="false" />
-                                </GridColumnsBase>
-                            </GridControl>
-                        }
-                    </div>
-                </div>
-            }
-            else if (_selectedTab == 3 && _snapshot is not null)
-            {
-                <LogControl @ref="_logControl"
-                            Theme="@ActiveTheme"
-                            Snapshot="@_snapshot"
-                            ExternalHistogramSeries="@_timeSeriesHistogramSeries"
-                            ShowChrome="false" />
-            }
-            else if (_selectedTab == 4)
-            {
-                <SqlTelemetryControl @ref="_sqlControl"
-                                     Theme="@ActiveTheme"
-                                     Tenant="@EffectiveTenant"
-                                     SearchText="@_searchText"
-                                     RefreshVersion="@_refreshVersion" />
-            }
-            else if (_selectedTab >= BuiltInTabCount && AdditionalTabs is not null)
-            {
-                var customIdx = _selectedTab - BuiltInTabCount;
-                if (customIdx >= 0 && customIdx < AdditionalTabs.Count)
-                {
-                    var customTab = AdditionalTabs[customIdx];
-                    var ctx = new TelemetryCustomTabContext(
-                        ActiveTheme,
-                        EffectiveTenant,
-                        _searchText,
-                        _selectedDays,
-                        _selectedMinutesBack,
-                        _snapshot);
-                    @customTab.Content(ctx)
-                }
-            }
         </div>
     </div>
 </CascadingValue>
@@ -713,8 +734,11 @@
     /// <summary>Optional extra toolbar buttons injected by the host application.</summary>
     [Parameter] public RenderFragment? ToolbarActions { get; set; }
 
-    /// <summary>Optional host-supplied tabs appended after the built-in FlexKit telemetry tabs.</summary>
+    /// <summary>Optional host-supplied tabs grouped under the <see cref="CustomWorkspaceLabel"/> section.</summary>
     [Parameter] public IReadOnlyList<TelemetryCustomTab>? AdditionalTabs { get; set; }
+
+    /// <summary>Label shown on the section button for host <see cref="AdditionalTabs"/>.</summary>
+    [Parameter] public string CustomWorkspaceLabel { get; set; } = "Historical & Reports";
 
     /// <summary>Optional 6th KPI card shown on the Overview tab.</summary>
     [Parameter] public TelemetryCustomKpiCard? CustomKpiCard { get; set; }
@@ -796,9 +820,21 @@
     private FlexControlLocation ChildLocation => GetOrCreateChildLocation("TelemetryControl", () => Title, isScreenRoot: IsScreenRoot);
     protected override string? ResolveControlIdentifier() => Title;
 
+    private bool HasCustomTabs => AdditionalTabs is { Count: > 0 };
     public TelemetryTheme ActiveTheme => Theme ?? _internalTheme;
-    public TelemetryWorkspaceMode ActiveWorkspaceMode =>
-        EnableProductAnalytics ? (WorkspaceMode ?? _internalWorkspaceMode) : TelemetryWorkspaceMode.Observability;
+    public TelemetryWorkspaceMode ActiveWorkspaceMode
+    {
+        get
+        {
+            var raw = WorkspaceMode ?? _internalWorkspaceMode;
+            if (raw == TelemetryWorkspaceMode.ProductAnalytics && !EnableProductAnalytics)
+                return TelemetryWorkspaceMode.Observability;
+            if (raw == TelemetryWorkspaceMode.CustomTabs && !HasCustomTabs)
+                return TelemetryWorkspaceMode.Observability;
+            return raw;
+        }
+    }
+    public LogControl? ActiveLogControl => _logControl;
     public FlexTelemetrySnapshot? CurrentSnapshot => _snapshot;
     public FlexProductAnalyticsSnapshot? CurrentProductSnapshot => _productSnapshot;
     public int SelectedTabIndex => _selectedTab;
@@ -835,22 +871,21 @@
                 };
             }
 
+            if (ActiveWorkspaceMode == TelemetryWorkspaceMode.CustomTabs && AdditionalTabs is not null)
+            {
+                return AdditionalTabs.Select(custom => new TabStripItem { Text = custom.Title }).ToList();
+            }
+
             var overviewLabel = ActiveTheme == TelemetryTheme.GrafanaDark ? "Grafana Overview" : "Telemetry Overview";
             var logLabel = ActiveTheme == TelemetryTheme.GrafanaDark ? "Loki / CloudWatch Logs" : "Log Explorer";
-            var items = new List<TabStripItem>(BuiltInTabCount + (AdditionalTabs?.Count ?? 0))
+            return new List<TabStripItem>(BuiltInTabCount)
             {
-                new TabStripItem { Text = overviewLabel },
+                new TabStripItem { Text = logLabel },
+                new TabStripItem { Text = "SQL Queries" },
                 new TabStripItem { Text = "Control Telemetry & Grids" },
                 new TabStripItem { Text = "Screens, Tasks & Zero-Use" },
-                new TabStripItem { Text = logLabel },
-                new TabStripItem { Text = "SQL Queries" }
+                new TabStripItem { Text = overviewLabel }
             };
-            if (AdditionalTabs is not null)
-            {
-                foreach (var custom in AdditionalTabs)
-                    items.Add(new TabStripItem { Text = custom.Title });
-            }
-            return items;
         }
     }
 
@@ -947,9 +982,12 @@
 
     public void SelectTab(int index)
     {
-        var max = ActiveWorkspaceMode == TelemetryWorkspaceMode.ProductAnalytics
-            ? ProductAnalyticsTabCount - 1
-            : BuiltInTabCount + (AdditionalTabs?.Count ?? 0) - 1;
+        var max = ActiveWorkspaceMode switch
+        {
+            TelemetryWorkspaceMode.ProductAnalytics => ProductAnalyticsTabCount - 1,
+            TelemetryWorkspaceMode.CustomTabs => (AdditionalTabs?.Count ?? 1) - 1,
+            _ => BuiltInTabCount - 1
+        };
         _selectedTab = Math.Clamp(index, 0, Math.Max(0, max));
         StateHasChanged();
     }
@@ -961,8 +999,8 @@
         {
             if (string.Equals(AdditionalTabs[i].Key, key, StringComparison.OrdinalIgnoreCase))
             {
-                _internalWorkspaceMode = TelemetryWorkspaceMode.Observability;
-                _selectedTab = BuiltInTabCount + i;
+                _internalWorkspaceMode = TelemetryWorkspaceMode.CustomTabs;
+                _selectedTab = i;
                 StateHasChanged();
                 return;
             }
@@ -1277,7 +1315,20 @@
             return;
         }
 
-        if (_selectedTab == 3 && _logControl is not null)
+        if (ActiveWorkspaceMode == TelemetryWorkspaceMode.CustomTabs && OnCustomTabExportCsv is not null)
+        {
+            var customExport = OnCustomTabExportCsv(_selectedTab);
+            if (customExport.HasValue)
+            {
+                var cFile = $"{ExportFilePrefix}-{customExport.Value.Suffix}-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+                var cBytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(customExport.Value.CsvContent)).ToArray();
+                await DownloadBytesAsync(cBytes, cFile, "text/csv");
+                RecordControlAction("ExportedCsv", customExport.Value.Suffix);
+                return;
+            }
+        }
+
+        if (_selectedTab == 0 && _logControl is not null)
         {
             await _logControl.ExportCsvAsync(ExportFilePrefix);
             return;
@@ -1286,27 +1337,14 @@
         string suffix;
         string csvBody;
 
-        if (_selectedTab >= BuiltInTabCount && OnCustomTabExportCsv is not null)
-        {
-            var customExport = OnCustomTabExportCsv(_selectedTab - BuiltInTabCount);
-            if (customExport.HasValue)
-            {
-                suffix = customExport.Value.Suffix;
-                csvBody = customExport.Value.CsvContent;
-            }
-            else
-            {
-                (suffix, csvBody) = BuildScreensOrTasksCsv();
-            }
-        }
-        else if (_selectedTab == 1 && _controlActivity is not null)
-        {
-            (suffix, csvBody) = _controlActivity.BuildCurrentCsv();
-        }
-        else if (_selectedTab == 4 && _sqlControl is not null)
+        if (_selectedTab == 1 && _sqlControl is not null)
         {
             suffix = "sql-queries";
             csvBody = _sqlControl.BuildCsv();
+        }
+        else if (_selectedTab == 2 && _controlActivity is not null)
+        {
+            (suffix, csvBody) = _controlActivity.BuildCurrentCsv();
         }
         else
         {
@@ -1322,7 +1360,7 @@
     private (string Suffix, string CsvContent) BuildScreensOrTasksCsv()
     {
         var sb = new StringBuilder();
-        if (_selectedTab == 2 && _screenSubMode == "TasksReports")
+        if (_selectedTab == 3 && _screenSubMode == "TasksReports")
         {
             sb.AppendLine("Type,Name,Module,Status,Executions,Users,LastExecuted");
             foreach (var r in FilteredTaskRows)

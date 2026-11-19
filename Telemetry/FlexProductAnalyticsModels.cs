@@ -8,7 +8,8 @@ namespace Fx.ControlKit.Telemetry;
 public enum TelemetryWorkspaceMode
 {
     Observability = 0,
-    ProductAnalytics = 1
+    ProductAnalytics = 1,
+    CustomTabs = 2
 }
 
 /// <summary>

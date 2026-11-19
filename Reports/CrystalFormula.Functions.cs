@@ -21,6 +21,8 @@ public sealed partial class CrystalFormula
         "split join filter ubound makearray array round roundup truncate int fix abs sgn ceiling floor remainder mod sqr exp log pi rnd atn sin cos tan " +
         "groupname rgb color barcodec39 barcodec39ascii groupinglevel counthierarchicalchildren defaultvaluesfornulls exceptionsfornulls evaluateafter " +
         "previousvalue nextvalue previousisnull nextisnull").Split(' '), StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> PartialTextFunctions = new(("len length left right mid asc ascw chr chrw instr instrrev replace split filter join " +
+        "space replicate replicatestring ubound isnull hasvalue evaluateafter").Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> ZeroArgumentFunctions = new("pi rnd".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> Constants = new(("true false yes no null currentdate currentdatetime currenttime today now timer printdate printtime datadate datatime " +
         "pagenumber totalpagecount pagenofm recordnumber onfirstrecord onlastrecord drilldowngrouplevel inrepeatedgroupheader currentfieldvalue defaultattribute groupnumber " +
@@ -165,7 +167,7 @@ public sealed partial class CrystalFormula
         }
         try
         {
-            return name switch
+            var result = name switch
             {
                 "isnull" => Arg(0) is null or DBNull, "hasvalue" => Arg(0) is not (null or DBNull),
                 "onfirstrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == 0, "onlastrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == f.Context.RecordCount - 1,
@@ -236,6 +238,13 @@ public sealed partial class CrystalFormula
                 "evaluateafter" => Arg(0),
                 _ => throw new NotSupportedException($"Crystal function '{call.Name}' is not implemented.")
             };
+            // A function reads its text arguments through (a conversion, a test, a copy); those that read only what they return
+            // or meter their own search pay nothing more.
+            if (!PartialTextFunctions.Contains(name))
+                for (var i = 0; i < values.Length; i++)
+                    if (done[i] && values[i] is string text) Scan(f, text.Length);
+                    else if (done[i] && values[i] is CrystalRange range) Scan(f, CompareText(range.Start, range.End));
+            return result;
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidCastException or OverflowException)
         {
@@ -277,8 +286,8 @@ public sealed partial class CrystalFormula
         {
             case "count": return (decimal)items.Length;
             case "distinctcount": return DistinctCount(f, items);
-            case "sum": return present.Sum(Number);
-            case "average" or "avg": return present.Length == 0 ? throw new InvalidDataException("Average requires an array with at least one element.") : present.Sum(Number) / present.Length;
+            case "sum": return present.Sum(v => Number(f, v));
+            case "average" or "avg": return present.Length == 0 ? throw new InvalidDataException("Average requires an array with at least one element.") : present.Sum(v => Number(f, v)) / present.Length;
             default:
                 var maximum = name.Equals("maximum", StringComparison.OrdinalIgnoreCase);
                 if (items.Any(v => v is CrystalRange))
@@ -289,7 +298,7 @@ public sealed partial class CrystalFormula
                     return best is null ? null : RangeSummary(name, best);
                 }
                 if (present.Length == 0) throw new InvalidDataException($"{name} requires an array with at least one element.");
-                return present.Aggregate((best, next) => Compare(next, best) is var order && (maximum ? order > 0 : order < 0) ? next : best);
+                return present.Aggregate((best, next) => Compare(f, next, best) is var order && (maximum ? order > 0 : order < 0) ? next : best);
         }
     }
     /// <summary>Crystal's choice between range array elements for Maximum (the larger end) and Minimum (the smaller start): true keeps <paramref name="current"/>.
@@ -316,6 +325,13 @@ public sealed partial class CrystalFormula
     };
     private static object?[] Materialize(System.Collections.IEnumerable items)
     {
+        // A host collection (a prompt's selected values) is as long as it is; only an open-ended sequence is bounded.
+        if (items is System.Collections.ICollection collection)
+        {
+            var copy = new object?[collection.Count];
+            collection.CopyTo(copy, 0);
+            return copy;
+        }
         var list = new List<object?>();
         foreach (var item in items) { if (list.Count >= MaxHostArrayLength) throw new InvalidDataException("Array value exceeds the formula engine limit."); list.Add(item); }
         return list.ToArray();
@@ -586,7 +602,7 @@ public sealed partial class CrystalFormula
             foreach (var item in items)
             {
                 f.Tick(distinct.Count / 16 + 1);
-                if (!distinct.Any(d => Equal(d, item))) distinct.Add(item);
+                if (!distinct.Any(d => Equal(f, d, item))) distinct.Add(item);
             }
             return distinct.Count;
         }

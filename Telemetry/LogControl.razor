@@ -8,13 +8,14 @@
 @using Fx.ControlKit.Charts
 @using Fx.ControlKit.Grid
 @using Fx.ControlKit.Logging
+@using Microsoft.AspNetCore.Components.Web
 @using Microsoft.JSInterop
 
 @inject IServiceProvider Services
 @inject IJSRuntime JSRuntime
 
 <CascadingValue Value="@ChildLocation" IsFixed="true">
-    <div class="fx-log-root @ThemeClass">
+    <div class="fx-log-root @ThemeClass" tabindex="-1" @onkeydown="OnRootKeyDownAsync">
         @if (EffectiveShowChrome)
         {
             <ToolbarControl CssClass="fx-tel-toolbar" ShowCaptions="true" ShowCaptionsToggle="false" Tag="fx-log-toolbar">
@@ -23,6 +24,10 @@
                                           Title="Flush pending in-memory control actions and refresh log stream"
                                           Tag="fx-log-refresh"
                                           OnClick="RefreshStandaloneAsync" />
+                    <ToolbarButtonControl Label="Find... (Ctrl+F)"
+                                          Title="Open Find dialog to locate logs by text or wildcard across columns"
+                                          Tag="fx-log-open-find"
+                                          OnClick="() => OpenFindDialog()" />
                     <ToolbarButtonControl Label="Export CSV"
                                           Title="Export filtered log rows to CSV"
                                           Tag="fx-log-export-csv"
@@ -43,8 +48,8 @@
                                         ValueChanged="OnStandaloneSearchChanged"
                                         UpdateOnInput="true"
                                         ClearableText="true"
-                                        Placeholder="Search location, tag, control, value..."
-                                        Width="220px" />
+                                        Placeholder="Search date, type, screen, control, value..."
+                                        Width="240px" />
                         <DropDownListControl TValue="TelemetryTheme" TItem="ThemeChoice"
                                              Tag="fx-log-theme-picker"
                                              DataSource="@ThemeChoices"
@@ -59,16 +64,141 @@
             </ToolbarControl>
         }
 
-        @if (ShowHistogram && ActiveSnapshot is not null)
+        @* ── Quick What's-Happening Strip (Categorized by Date & Type) ── *@
+        <div class="fx-log-summary-strip">
+            <div class="fx-log-summary-stats">
+                <span class="fx-log-stat-chip">
+                    <span class="fx-log-stat-lbl">Today</span>
+                    <strong>@TodayLogCount.ToString("N0")</strong>
+                </span>
+                <span class="fx-log-stat-chip">
+                    <span class="fx-log-stat-lbl">Total Logs</span>
+                    <strong>@AllWindowRows.Count.ToString("N0")</strong>
+                </span>
+                <span class="fx-log-stat-chip">
+                    <span class="fx-log-stat-lbl">Dates</span>
+                    <strong>@DistinctDateCount.ToString("N0")</strong>
+                </span>
+                <span class="fx-log-stat-chip">
+                    <span class="fx-log-stat-lbl">Users</span>
+                    <strong>@DistinctUserCount.ToString("N0")</strong>
+                </span>
+                @if (ErrorRowCount > 0)
+                {
+                    <span class="fx-log-stat-chip fx-log-stat-err">
+                        <span class="fx-log-stat-lbl">Errors</span>
+                        <strong>@ErrorRowCount.ToString("N0")</strong>
+                    </span>
+                }
+            </div>
+
+            <div class="fx-log-actions-right">
+                <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active fx-log-find-btn"
+                               Tag="fx-log-find-btn"
+                               Title="Find logs by text or wildcard (*, ?) across any column (Ctrl+F / F3)"
+                               OnClick="() => OpenFindDialog()">
+                    &#128269; Find...
+                </ButtonControl>
+
+                @if (!string.IsNullOrWhiteSpace(_activeFindFilterText))
+                {
+                    <ButtonControl CssClass="fx-tel-pill fx-log-clear-find-btn"
+                                   Tag="fx-log-clear-find-filter"
+                                   OnClick="ClearFindFilter">
+                        ✕ Find Filter: "@_activeFindFilterText" (@FilteredRows.Count)
+                    </ButtonControl>
+                }
+
+                <span class="fx-tel-subbar-label">Group By:</span>
+                @foreach (var gp in GroupPresets)
+                {
+                    var preset = gp;
+                    <ButtonControl CssClass="@PillCss(_groupPresetKey == preset.Key)"
+                                   Tag="@($"fx-log-grp-{preset.Key}")"
+                                   OnClick="() => ApplyGroupPreset(preset.Key)">
+                        @preset.Label
+                    </ButtonControl>
+                }
+
+                @if (_activeGroupColumns.Count > 0)
+                {
+                    <ButtonControl CssClass="fx-tel-pill"
+                                   Tag="fx-log-expand-all"
+                                   Title="Expand all Date and Type groups"
+                                   OnClick="ExpandAllAsync">
+                        ⊞ Expand
+                    </ButtonControl>
+                    <ButtonControl CssClass="fx-tel-pill"
+                                   Tag="fx-log-collapse-all"
+                                   Title="Collapse all Date and Type groups to summary headers"
+                                   OnClick="CollapseAllAsync">
+                        ⊟ Collapse
+                    </ButtonControl>
+                }
+
+                <ButtonControl CssClass="@PillCss(_showHistogramPanel)"
+                               Tag="fx-log-toggle-hist"
+                               Title="Show or hide the log volume histogram"
+                               OnClick="() => _showHistogramPanel = !_showHistogramPanel">
+                    Chart
+                </ButtonControl>
+                <ButtonControl CssClass="@PillCss(_showInspectorPanel)"
+                               Tag="fx-log-toggle-inspector"
+                               Title="Show or hide the structured JSON / SQL row inspector"
+                               OnClick="() => _showInspectorPanel = !_showInspectorPanel">
+                    Inspector
+                </ButtonControl>
+            </div>
+        </div>
+
+        @* ── Log Type Category Pills ── *@
+        <div class="fx-tel-subbar fx-log-type-bar">
+            <div class="fx-tel-pill-group">
+                <span class="fx-tel-subbar-label">Log Type:</span>
+                <ButtonControl CssClass="@PillCss(_selectedType == "All")"
+                               Tag="fx-log-type-all"
+                               OnClick='() => SelectType("All")'>
+                    All (@AllWindowRows.Count)
+                </ButtonControl>
+                @foreach (var tc in TypeCategorySummaries)
+                {
+                    var cat = tc;
+                    <ButtonControl CssClass="@PillCss(_selectedType == cat.Label)"
+                                   Tag="@($"fx-log-type-{cat.Label}")"
+                                   OnClick="() => SelectType(cat.Label)">
+                        @cat.Label (@cat.Count)
+                    </ButtonControl>
+                }
+            </div>
+
+            <div class="fx-tel-pill-group">
+                <ButtonControl CssClass="@PillCss(_includeSqlLogs)"
+                               Tag="fx-log-toggle-sql"
+                               Title="Include SQL statements, slow queries, and database errors in the unified log grid"
+                               OnClick="ToggleIncludeSqlLogs">
+                    @(_includeSqlLogs ? "✓ SQL Included" : "+ Include SQL")
+                </ButtonControl>
+                @if (!string.IsNullOrWhiteSpace(_findStatusBanner))
+                {
+                    <span class="fx-log-find-status">@_findStatusBanner</span>
+                }
+                else if (!string.IsNullOrWhiteSpace(ActiveSnapshot?.StorageHint))
+                {
+                    <span class="fx-tel-subbar-hint">@ActiveSnapshot!.StorageHint</span>
+                }
+            </div>
+        </div>
+
+        @if (_showHistogramPanel && ActiveSnapshot is not null)
         {
-            <CardControl Title="@($"Log Stream Histogram — {FilteredRows.Count} matching events ({ActiveSnapshot.TimeWindowLabel})")"
+            <CardControl Title="@($"Log Volume Histogram — {FilteredRows.Count:N0} matching logs ({ActiveSnapshot.TimeWindowLabel})")"
                          CssClass="fx-tel-card fx-log-hist-card"
                          Elevation="1">
-                @if (HistogramSeries.Count > 0 && ActiveSnapshot.TotalEvents > 0)
+                @if (HistogramSeries.Count > 0 && AllWindowRows.Count > 0)
                 {
                     <ChartControl Type="ChartType.StackedBar"
                                   Series="@HistogramSeries"
-                                  Height="110px" />
+                                  Height="98px" />
                 }
                 else
                 {
@@ -77,77 +207,89 @@
             </CardControl>
         }
 
-        <div class="fx-tel-subbar">
-            <div class="fx-tel-pill-group">
-                <span class="fx-tel-subbar-label">Log Stream:</span>
-                @foreach (var kindFilter in StreamKinds)
-                {
-                    var kf = kindFilter;
-                    <ButtonControl CssClass="@PillCss(_selectedKind == kf)"
-                                   Tag="@($"fx-log-kind-{kf}")"
-                                   OnClick="() => SelectKind(kf)">
-                        @kf
-                    </ButtonControl>
-                }
-            </div>
-
-            @if (!string.IsNullOrWhiteSpace(ActiveSnapshot?.StorageHint))
-            {
-                <span class="fx-tel-subbar-hint">@ActiveSnapshot!.StorageHint</span>
-            }
-        </div>
-
         <div class="fx-log-split">
             <div class="fx-tel-grid-host fx-log-grid-pane">
-                <GridControl TValue="FlexTelemetryEventRow"
+                <GridControl @ref="_gridRef"
+                             TValue="FlexTelemetryEventRow"
                              Tag="fx-log-stream-grid"
                              DataSource="@FilteredRows"
                              EventsRef="@_gridEvents"
+                             AllowGrouping="true"
+                             GroupColumns="@_activeGroupColumns"
+                             GroupHeaderTextSelector="@FormatGroupHeader"
+                             HideGroupedColumns="false"
+                             ShowGroupExpandCollapse="true"
+                             ShowSearchBar="true"
+                             ShowExpressionFilterButton="true"
                              AllowSorting="true"
                              AllowFiltering="true"
+                             EnableAdvancedFilterPopup="true"
                              AllowResizing="true"
                              AllowSelection="true"
                              EnableHover="true"
+                             RowCssClassSelector="@ResolveRowCssClass"
                              Height="100%"
                              WidthMode="GridWidthMode.FillAvailable">
                     <GridColumnsBase>
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.TimestampLocal)" HeaderText="@("@timestamp")" Width="158px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss.fff" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.LogDate)" HeaderText="Date" Width="108px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.TimeText)" HeaderText="Time" Width="102px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.LogType)" HeaderText="Type" Width="152px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var row = (FlexTelemetryEventRow)context;
+                                    var tv = row.LogType.Priority switch
+                                    {
+                                        1 => BadgeVariant.Danger,
+                                        2 => BadgeVariant.Info,
+                                        3 => BadgeVariant.Primary,
+                                        4 => BadgeVariant.Secondary,
+                                        6 => BadgeVariant.Success,
+                                        7 => BadgeVariant.Warning,
+                                        _ => BadgeVariant.Secondary
+                                    };
+                                }
+                                <BadgeControl Variant="@tv" Size="BadgeSize.Small" Text="@row.LogType.Label" />
+                            </Template>
+                        </GridColumn>
                         <GridColumn Field="@nameof(FlexTelemetryEventRow.Level)" HeaderText="Level" Width="74px" AllowEditing="false">
                             <Template>
                                 @{
                                     var row = (FlexTelemetryEventRow)context;
                                     var variant = string.Equals(row.Level, "ERROR", StringComparison.OrdinalIgnoreCase)
                                         ? BadgeVariant.Danger
-                                        : BadgeVariant.Success;
+                                        : (string.Equals(row.Level, "WARN", StringComparison.OrdinalIgnoreCase)
+                                            ? BadgeVariant.Warning
+                                            : BadgeVariant.Success);
                                 }
                                 <BadgeControl Variant="@variant" Size="BadgeSize.Small" Text="@row.Level" />
                             </Template>
                         </GridColumn>
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.UserId)" HeaderText="User" Width="100px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Kind)" HeaderText="Stream" Width="120px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.ControlType)" HeaderText="ControlType" Width="145px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Summary)" HeaderText="What Happened" Width="300px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.UserId)" HeaderText="User" Width="105px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Screen)" HeaderText="Screen" Width="170px" AllowEditing="false" />
                         <GridColumn Field="@nameof(FlexTelemetryEventRow.Action)" HeaderText="Action" Width="118px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Location)" HeaderText="Location Hierarchy" Width="265px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Control)" HeaderText="ControlId" Width="170px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Tag)" HeaderText="Tag" Width="115px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Value)" HeaderText="Value" Width="160px" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.DurationSeconds)" HeaderText="Dwell (s)" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
-                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Detail)" HeaderText="Detail" Width="195px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Control)" HeaderText="Control / Target" Width="165px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Value)" HeaderText="Value" Width="155px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Location)" HeaderText="Location Hierarchy" Width="255px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.ControlType)" HeaderText="ControlType" Width="135px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Tag)" HeaderText="Tag" Width="110px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.DurationSeconds)" HeaderText="Sec" Width="75px" Type="ColumnType.Number" Format="N2" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Detail)" HeaderText="Detail / SQL" Width="220px" AllowEditing="false" />
                     </GridColumnsBase>
                 </GridControl>
             </div>
 
-            @if (ShowInspector)
+            @if (_showInspectorPanel)
             {
                 var inspected = SelectedOrLatestRow;
-                <CardControl Title="Standard Structured Log Row Inspector (CloudWatch Logs Insights &amp; Serilog CLEF)"
+                <CardControl Title="Standard Structured Log &amp; SQL Row Inspector (CloudWatch Logs Insights &amp; Serilog CLEF)"
                              CssClass="fx-tel-card fx-log-inspector"
                              Elevation="1">
                     @if (inspected is not null)
                     {
                         <div class="fx-log-inspector-header">
                             <div class="fx-tel-badge-wrap">
-                                <BadgeControl Variant="BadgeVariant.Info" Size="BadgeSize.Small" Text="@inspected.ControlType" />
+                                <BadgeControl Variant="BadgeVariant.Info" Size="BadgeSize.Small" Text="@inspected.LogType.Label" />
                                 <BadgeControl Variant="BadgeVariant.Primary" Size="BadgeSize.Small" Text="@inspected.Action" />
                                 @if (!string.IsNullOrEmpty(inspected.Tag))
                                 {
@@ -156,6 +298,14 @@
                                 <span class="fx-log-inspector-loc">@inspected.Location</span>
                             </div>
                             <div class="fx-tel-pill-group">
+                                @if (inspected.IsSqlRow && !string.IsNullOrWhiteSpace(inspected.SqlStatement))
+                                {
+                                    <ButtonControl CssClass="@PillCss(_inspectorFormat == "SQL")"
+                                                   Tag="fx-log-fmt-sql"
+                                                   OnClick='() => SetInspectorFormat("SQL")'>
+                                        SQL Statement
+                                    </ButtonControl>
+                                }
                                 <ButtonControl CssClass="@PillCss(_inspectorFormat == "CloudWatch")"
                                                Tag="fx-log-fmt-cw"
                                                OnClick='() => SetInspectorFormat("CloudWatch")'>
@@ -168,7 +318,14 @@
                                 </ButtonControl>
                             </div>
                         </div>
-                        <pre class="fx-log-json-pre">@(_inspectorFormat == "CLEF" ? inspected.SerilogClefJsonIndented : inspected.CloudWatchJsonIndented)</pre>
+                        @if (_inspectorFormat == "SQL" && inspected.IsSqlRow && !string.IsNullOrWhiteSpace(inspected.SqlStatement))
+                        {
+                            <pre class="fx-log-json-pre">@inspected.SqlStatement@(!string.IsNullOrWhiteSpace(inspected.SqlParameters) ? $"\n-- Parameters: {FlexDiagnosticSnapshotService.RedactSqlParameters(inspected.SqlParameters)}" : string.Empty)</pre>
+                        }
+                        else
+                        {
+                            <pre class="fx-log-json-pre">@(_inspectorFormat == "CLEF" ? inspected.SerilogClefJsonIndented : inspected.CloudWatchJsonIndented)</pre>
+                        }
                     }
                     else
                     {
@@ -177,11 +334,107 @@
                 </CardControl>
             }
         </div>
+
+        @* ── VB / FlexKit Modal Find Dialog (Ctrl+F / Find...) ── *@
+        @if (_findDialogVisible)
+        {
+            <DialogControl Visible="true"
+                           Header="Find in Logs"
+                           Width="460px"
+                           IsModal="true"
+                           CloseOnEscape="true"
+                           OnClose="CloseFindDialog">
+                <ChildContent>
+                    <div class="fx-log-find-form">
+                        <div class="fx-log-find-row">
+                            <label class="fx-log-find-lbl">Find what:</label>
+                            <TextBoxControl @ref="_findInputRef"
+                                            Value="@_findText"
+                                            Tag="fx-log-find-input"
+                                            ValueChanged="OnFindTextChanged"
+                                            UpdateOnInput="true"
+                                            SelectOnFocus="true"
+                                            ClearableText="true"
+                                            Placeholder="Text or wildcard (e.g. Purchase*, *Error*, PO-104)..."
+                                            OnKeyDown="OnFindDialogKeyDownAsync"
+                                            Width="100%" />
+                        </div>
+
+                        <div class="fx-log-find-row">
+                            <label class="fx-log-find-lbl">Look in:</label>
+                            <DropDownListControl TValue="string" TItem="FindFieldOption"
+                                                 Tag="fx-log-find-field"
+                                                 DataSource="@FindFieldOptions"
+                                                 Value="@_findField"
+                                                 ValueChanged="v => _findField = v ?? AllColumnsField"
+                                                 ValueFieldName="@nameof(FindFieldOption.Field)"
+                                                 TextFieldName="@nameof(FindFieldOption.Label)"
+                                                 Width="100%"
+                                                 SuppressUnchangedValueChange="true" />
+                        </div>
+
+                        <div class="fx-log-find-opts">
+                            <div class="fx-log-find-checks">
+                                <CheckBoxControl @bind-Checked="_findMatchWholeWord"
+                                                 Tag="fx-log-find-whole"
+                                                 Label="Match whole word only" />
+                                <CheckBoxControl @bind-Checked="_findMatchCase"
+                                                 Tag="fx-log-find-case"
+                                                 Label="Match case" />
+                            </div>
+
+                            <div class="fx-log-find-dir">
+                                <span class="fx-log-find-dir-title">Direction</span>
+                                <RadioControl TValue="bool"
+                                              Name="fx-log-find-direction"
+                                              Value="false"
+                                              @bind-SelectedValue="_findSearchDown"
+                                              Label="Up" />
+                                <RadioControl TValue="bool"
+                                              Name="fx-log-find-direction"
+                                              Value="true"
+                                              @bind-SelectedValue="_findSearchDown"
+                                              Label="Down" />
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(_findDialogMessage))
+                        {
+                            <div class="fx-log-find-msg @(_findDialogNoMatch ? "fx-log-find-msg-warn" : "fx-log-find-msg-ok")">
+                                @_findDialogMessage
+                            </div>
+                        }
+                    </div>
+                </ChildContent>
+                <FooterContent>
+                    <ButtonControl Tag="fx-log-find-next"
+                                   Disabled="@string.IsNullOrWhiteSpace(_findText)"
+                                   Style="@(string.IsNullOrWhiteSpace(_findText) ? "" : "background:#0a246a;color:#fff;border-color:#0a246a;")"
+                                   OnClick="() => FindNextCoreAsync()">
+                        Find Next
+                    </ButtonControl>
+                    <ButtonControl Tag="fx-log-find-filter-all"
+                                   Disabled="@string.IsNullOrWhiteSpace(_findText)"
+                                   OnClick="ApplyFindAsGridFilterAsync">
+                        Filter Grid to Matches
+                    </ButtonControl>
+                    <ButtonControl Tag="fx-log-find-cancel"
+                                   OnClick="CloseFindDialog">
+                        Close
+                    </ButtonControl>
+                </FooterContent>
+            </DialogControl>
+        }
     </div>
 </CascadingValue>
 
 @code {
     public sealed record ThemeChoice(TelemetryTheme Value, string Label);
+    public sealed record GroupPreset(string Key, string Label, string[] Columns);
+    public sealed record FindFieldOption(string Field, string Label);
+    public sealed record TypeCategorySummary(int Priority, string Label, int Count);
+
+    public const string AllColumnsField = "*";
 
     private static readonly List<ThemeChoice> ThemeChoices = new()
     {
@@ -190,10 +443,31 @@
         new(TelemetryTheme.ModernLight, "Style: Modern Light")
     };
 
-    private static readonly string[] StreamKinds =
+    private static readonly GroupPreset[] GroupPresets =
     {
-        "All", "ButtonClick", "GridOperation", "ControlChange", "MenuAction",
-        "ScreenOpen", "TaskLaunch", "ReportRun", "Session", "UnhandledError"
+        new("date-type", "Date → Type", new[] { nameof(FlexTelemetryEventRow.LogDate), nameof(FlexTelemetryEventRow.LogType) }),
+        new("date", "Date Only", new[] { nameof(FlexTelemetryEventRow.LogDate) }),
+        new("type-date", "Type → Date", new[] { nameof(FlexTelemetryEventRow.LogType), nameof(FlexTelemetryEventRow.LogDate) }),
+        new("screen-type", "Screen → Type", new[] { nameof(FlexTelemetryEventRow.Screen), nameof(FlexTelemetryEventRow.LogType) }),
+        new("user-date", "User → Date", new[] { nameof(FlexTelemetryEventRow.UserId), nameof(FlexTelemetryEventRow.LogDate) }),
+        new("flat", "Flat Stream", Array.Empty<string>())
+    };
+
+    private static readonly List<FindFieldOption> FindFieldOptions = new()
+    {
+        new(AllColumnsField, "All Columns (Entire Log Row)"),
+        new(nameof(FlexTelemetryEventRow.Summary), "What Happened (Summary)"),
+        new(nameof(FlexTelemetryEventRow.LogType), "Log Type"),
+        new(nameof(FlexTelemetryEventRow.LogDate), "Date (yyyy-MM-dd)"),
+        new(nameof(FlexTelemetryEventRow.UserId), "User"),
+        new(nameof(FlexTelemetryEventRow.Screen), "Screen"),
+        new(nameof(FlexTelemetryEventRow.Action), "Action"),
+        new(nameof(FlexTelemetryEventRow.Control), "Control / Target"),
+        new(nameof(FlexTelemetryEventRow.Value), "Value"),
+        new(nameof(FlexTelemetryEventRow.Location), "Location Hierarchy"),
+        new(nameof(FlexTelemetryEventRow.ControlType), "ControlType"),
+        new(nameof(FlexTelemetryEventRow.Tag), "Tag"),
+        new(nameof(FlexTelemetryEventRow.Detail), "Detail / SQL")
     };
 
     [Parameter] public string Title { get; set; } = "LogExplorer";
@@ -201,11 +475,16 @@
     [Parameter] public EventCallback<TelemetryTheme> ThemeChanged { get; set; }
     [Parameter] public FlexTelemetrySnapshot? Snapshot { get; set; }
     [Parameter] public List<ChartSeries>? ExternalHistogramSeries { get; set; }
+    [Parameter] public string? Tenant { get; set; }
+    [Parameter] public string? SearchText { get; set; }
     [Parameter] public bool? ShowChrome { get; set; }
-    [Parameter] public bool ShowHistogram { get; set; } = true;
+    [Parameter] public bool ShowHistogram { get; set; } = false;
     [Parameter] public bool ShowInspector { get; set; } = true;
     [Parameter] public int StandaloneDaysBack { get; set; } = 30;
+    [Parameter] public string DefaultGroupPreset { get; set; } = "date-type";
 
+    private GridControl<FlexTelemetryEventRow>? _gridRef;
+    private TextBoxControl? _findInputRef;
     private readonly GridControlEvents<FlexTelemetryEventRow> _gridEvents = new();
     private BrowserInterop? _browserInterop;
     private DefaultFlexTelemetryDataSource? _ownedFallbackSource;
@@ -213,9 +492,35 @@
     private List<ChartSeries> _standaloneHistogram = new();
     private TelemetryTheme? _localThemeOverride;
     private string _standaloneSearch = string.Empty;
-    private string _selectedKind = "All";
+    private string _selectedType = "All";
+    private bool _includeSqlLogs = true;
+    private string _groupPresetKey = "date-type";
+    private List<string> _activeGroupColumns = new()
+    {
+        nameof(FlexTelemetryEventRow.LogDate),
+        nameof(FlexTelemetryEventRow.LogType)
+    };
+    private bool _groupPresetInitialized;
+    private bool _showHistogramPanel;
+    private bool _showInspectorPanel = true;
+    private bool _panelsInitialized;
     private string _inspectorFormat = "CloudWatch";
     private FlexTelemetryEventRow? _selectedRow;
+
+    // Find dialog & Find-Next state
+    private bool _findDialogVisible;
+    private bool _focusFindInputPending;
+    private string _findText = string.Empty;
+    private string _findField = AllColumnsField;
+    private bool _findMatchWholeWord;
+    private bool _findMatchCase;
+    private bool _findSearchDown = true;
+    private int _findCursorIndex = -1;
+    private FlexTelemetryEventRow? _findMatchedRow;
+    private string _findDialogMessage = string.Empty;
+    private bool _findDialogNoMatch;
+    private string _findStatusBanner = string.Empty;
+    private string _activeFindFilterText = string.Empty;
 
     private FlexControlLocation ChildLocation => GetOrCreateChildLocation("LogControl", () => Title);
     protected override string? ResolveControlIdentifier() => Title;
@@ -223,6 +528,7 @@
     private TelemetryTheme EffectiveTheme => _localThemeOverride ?? Theme;
     private bool EffectiveShowChrome => ShowChrome ?? (Snapshot is null);
     private FlexTelemetrySnapshot? ActiveSnapshot => Snapshot ?? _standaloneSnapshot;
+    private string EffectiveSearch => !string.IsNullOrWhiteSpace(SearchText) ? SearchText! : _standaloneSearch;
 
     private List<ChartSeries> HistogramSeries =>
         ExternalHistogramSeries ?? _standaloneHistogram;
@@ -234,17 +540,74 @@
         _ => "fx-tel-theme-vb"
     };
 
-    public IReadOnlyList<FlexTelemetryEventRow> FilteredRows =>
-        (ActiveSnapshot?.RecentEvents ?? Array.Empty<FlexTelemetryEventRow>())
-            .Where(r => _selectedKind == "All" || string.Equals(r.Kind, _selectedKind, StringComparison.OrdinalIgnoreCase))
+    public IReadOnlyList<FlexTelemetryEventRow> AllWindowRows => BuildUnifiedWindowRows();
+
+    public IReadOnlyList<FlexTelemetryEventRow> FilteredRows
+    {
+        get
+        {
+            IEnumerable<FlexTelemetryEventRow> query = AllWindowRows;
+            if (!string.Equals(_selectedType, "All", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(r => string.Equals(r.LogType.Label, _selectedType, StringComparison.OrdinalIgnoreCase)
+                                         || string.Equals(r.Kind, _selectedType, StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(_activeFindFilterText))
+            {
+                var pattern = BuildWildcardPattern(_activeFindFilterText, _findMatchWholeWord);
+                query = query.Where(r => RowMatchesFind(r, _findField, pattern, _findMatchCase));
+            }
+            return query.ToList();
+        }
+    }
+
+    private int TodayLogCount
+    {
+        get
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            return AllWindowRows.Count(r => r.LogDate.Date == today);
+        }
+    }
+
+    private int DistinctDateCount =>
+        AllWindowRows.Select(r => r.LogDate.Date).Distinct().Count();
+
+    private int DistinctUserCount =>
+        AllWindowRows
+            .Select(r => r.UserId)
+            .Where(u => !string.IsNullOrWhiteSpace(u) && !string.Equals(u, "anonymous", StringComparison.OrdinalIgnoreCase) && !string.Equals(u, "(system)", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+    private int ErrorRowCount =>
+        AllWindowRows.Count(r => r.LogType.Priority == 1 || string.Equals(r.Level, "ERROR", StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<TypeCategorySummary> TypeCategorySummaries =>
+        AllWindowRows
+            .GroupBy(r => r.LogType)
+            .OrderBy(g => g.Key)
+            .Select(g => new TypeCategorySummary(g.Key.Priority, g.Key.Label, g.Count()))
             .ToList();
 
     private FlexTelemetryEventRow? SelectedOrLatestRow =>
-        _selectedRow ?? FilteredRows.FirstOrDefault();
+        _selectedRow ?? _findMatchedRow ?? FilteredRows.FirstOrDefault();
 
     protected override void OnInitialized()
     {
         RegisterControlPresence();
+        if (!_groupPresetInitialized)
+        {
+            _groupPresetInitialized = true;
+            ApplyGroupPresetCore(DefaultGroupPreset);
+        }
+        if (!_panelsInitialized)
+        {
+            _panelsInitialized = true;
+            _showHistogramPanel = ShowHistogram;
+            _showInspectorPanel = ShowInspector;
+        }
+
         _gridEvents.RowSelected = EventCallback.Factory.Create<RowSelectEventArgs<FlexTelemetryEventRow>>(this, OnRowSelected);
         if (Snapshot is null)
         {
@@ -257,11 +620,155 @@
         if (ThemeChanged.HasDelegate)
             _localThemeOverride = null;
 
-        if (_selectedRow is not null && ActiveSnapshot is not null
-            && !ActiveSnapshot.RecentEvents.Any(r => r.TimestampUtc == _selectedRow.TimestampUtc && r.Action == _selectedRow.Action))
+        if (_selectedRow is not null)
         {
-            _selectedRow = null;
+            var all = AllWindowRows;
+            if (!all.Any(r => r.TimestampUtc == _selectedRow.TimestampUtc && r.Action == _selectedRow.Action))
+                _selectedRow = null;
         }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_findDialogVisible && _focusFindInputPending && _findInputRef is not null)
+        {
+            _focusFindInputPending = false;
+            try { await _findInputRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private IReadOnlyList<FlexTelemetryEventRow> BuildUnifiedWindowRows()
+    {
+        var snap = ActiveSnapshot;
+        var baseEvents = snap?.RecentEvents ?? Array.Empty<FlexTelemetryEventRow>();
+        var list = new List<FlexTelemetryEventRow>(baseEvents.Count + 64);
+        list.AddRange(baseEvents);
+
+        if (_includeSqlLogs && Services.GetService(typeof(IFlexSqlTelemetryProvider)) is IFlexSqlTelemetryProvider sqlProvider)
+        {
+            var nowUtc = DateTime.UtcNow;
+            int daysBack = snap?.DaysBack > 0 ? snap.DaysBack : StandaloneDaysBack;
+            var cutoffUtc = snap?.MinutesBack is > 0
+                ? nowUtc.AddMinutes(-snap.MinutesBack.Value)
+                : nowUtc.AddDays(-daysBack);
+
+            var tenantScope = !string.IsNullOrWhiteSpace(Tenant) && !string.Equals(Tenant, "*", StringComparison.Ordinal)
+                ? Tenant
+                : null;
+
+            var sqlHistory = sqlProvider.GetRecentQueries(tenant: tenantScope, excludeBackgroundPolls: true, maxCount: 500);
+            var qSearch = EffectiveSearch;
+            foreach (var sq in sqlHistory)
+            {
+                if (sq.TimestampUtc < cutoffUtc)
+                    continue;
+                var row = sq.ToEventRow();
+                if (!string.IsNullOrWhiteSpace(qSearch) && !MatchesQuickSearch(row, qSearch))
+                    continue;
+                list.Add(row);
+            }
+        }
+
+        list.Sort((a, b) => b.TimestampUtc.CompareTo(a.TimestampUtc));
+        return list;
+    }
+
+    private static bool MatchesQuickSearch(FlexTelemetryEventRow r, string q) =>
+        r.Summary.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.LogType.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.LogDate.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.UserId.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.Screen.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.Action.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.Control.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || r.Location.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || (!string.IsNullOrEmpty(r.Tag) && r.Tag.Contains(q, StringComparison.OrdinalIgnoreCase))
+        || (!string.IsNullOrEmpty(r.Value) && r.Value.Contains(q, StringComparison.OrdinalIgnoreCase))
+        || r.Detail.Contains(q, StringComparison.OrdinalIgnoreCase);
+
+    private string FormatGroupHeader(string field, string key, IReadOnlyList<FlexTelemetryEventRow> items)
+    {
+        if (string.Equals(field, nameof(FlexTelemetryEventRow.LogDate), StringComparison.OrdinalIgnoreCase))
+        {
+            var dateLabel = key;
+            if (DateOnly.TryParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+            {
+                var today = DateOnly.FromDateTime(DateTime.Now);
+                var rel = parsed == today
+                    ? "Today · "
+                    : (parsed == today.AddDays(-1) ? "Yesterday · " : string.Empty);
+                dateLabel = $"{key} ({rel}{parsed.ToString("ddd, MMM d", CultureInfo.InvariantCulture)})";
+            }
+
+            int users = items
+                .Select(i => i.UserId)
+                .Where(u => !string.IsNullOrWhiteSpace(u) && !string.Equals(u, "(system)", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            int errs = items.Count(i => i.LogType.Priority == 1 || string.Equals(i.Level, "ERROR", StringComparison.OrdinalIgnoreCase));
+            var errSuffix = errs > 0 ? $" · {errs} error{(errs == 1 ? "" : "s")}" : string.Empty;
+            return $"{dateLabel} — {items.Count:N0} log{(items.Count == 1 ? "" : "s")} · {users} user{(users == 1 ? "" : "s")}{errSuffix}";
+        }
+
+        if (string.Equals(field, nameof(FlexTelemetryEventRow.LogType), StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{key} — {items.Count:N0} log{(items.Count == 1 ? "" : "s")}";
+        }
+
+        return $"{key} ({items.Count:N0})";
+    }
+
+    private string? ResolveRowCssClass(FlexTelemetryEventRow row, int index)
+    {
+        if (_findMatchedRow is not null && ReferenceEquals(row, _findMatchedRow))
+            return "fx-log-find-match";
+        if (string.Equals(row.Level, "ERROR", StringComparison.OrdinalIgnoreCase))
+            return "fx-log-row-error";
+        return null;
+    }
+
+    private void ApplyGroupPreset(string key)
+    {
+        ApplyGroupPresetCore(key);
+        RecordControlAction("LogGroupChanged", key);
+    }
+
+    private void ApplyGroupPresetCore(string key)
+    {
+        var preset = GroupPresets.FirstOrDefault(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase))
+                     ?? GroupPresets[0];
+        _groupPresetKey = preset.Key;
+        // Allocate a fresh List<string> instance so GridControl.SyncGroupDescriptorsFromParameter detects the change.
+        _activeGroupColumns = preset.Columns.ToList();
+    }
+
+    private async Task ExpandAllAsync()
+    {
+        if (_gridRef is not null)
+            await _gridRef.ExpandAllGroupAsync();
+        RecordControlAction("GroupsExpandedAll");
+    }
+
+    private async Task CollapseAllAsync()
+    {
+        if (_gridRef is not null)
+            await _gridRef.CollapseAllGroupAsync();
+        RecordControlAction("GroupsCollapsedAll");
+    }
+
+    private void ToggleIncludeSqlLogs()
+    {
+        _includeSqlLogs = !_includeSqlLogs;
+        _findCursorIndex = -1;
+        RecordControlAction("SqlLogsToggled", _includeSqlLogs ? "Included" : "Hidden");
+    }
+
+    private void SelectType(string typeLabel)
+    {
+        _selectedType = typeLabel;
+        _selectedRow = null;
+        _findCursorIndex = -1;
+        RecordControlAction("LogTypeFiltered", typeLabel);
     }
 
     private void OnRowSelected(RowSelectEventArgs<FlexTelemetryEventRow> args)
@@ -269,15 +776,10 @@
         if (args.Data is not null)
         {
             _selectedRow = args.Data;
+            if (args.Data.IsSqlRow && _inspectorFormat != "CLEF" && _inspectorFormat != "CloudWatch")
+                _inspectorFormat = "SQL";
             RecordControlAction("LogRowInspected", $"{args.Data.ControlType}:{args.Data.Control}", args.Data.Action);
         }
-    }
-
-    private void SelectKind(string kind)
-    {
-        _selectedKind = kind;
-        _selectedRow = null;
-        RecordControlAction("StreamFiltered", kind);
     }
 
     private void SetInspectorFormat(string fmt)
@@ -285,6 +787,283 @@
         _inspectorFormat = fmt;
         RecordControlAction("InspectorFormatChanged", fmt);
     }
+
+    // ── Find (Ctrl+F / F3 / Modal Find Dialog) ──────────────────────────────
+
+    private async Task OnRootKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.CtrlKey && string.Equals(e.Key, "f", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenFindDialog();
+        }
+        else if (string.Equals(e.Key, "F3", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_findText))
+        {
+            await FindNextCoreAsync(searchDownOverride: !e.ShiftKey);
+        }
+    }
+
+    public void OpenFindDialog(string? initialText = null)
+    {
+        if (!string.IsNullOrWhiteSpace(initialText))
+            _findText = initialText!;
+
+        if (_gridRef is not null)
+        {
+            var currentCol = _gridRef.GetCurrentColumnField();
+            if (!string.IsNullOrWhiteSpace(currentCol)
+                && FindFieldOptions.Any(o => string.Equals(o.Field, currentCol, StringComparison.OrdinalIgnoreCase))
+                && _findField != AllColumnsField)
+            {
+                _findField = currentCol!;
+            }
+        }
+
+        _findDialogMessage = string.Empty;
+        _findDialogNoMatch = false;
+        _findDialogVisible = true;
+        _focusFindInputPending = true;
+        RecordControlAction("FindDialogOpened", _findField);
+        StateHasChanged();
+    }
+
+    private void CloseFindDialog()
+    {
+        _findDialogVisible = false;
+        _focusFindInputPending = false;
+    }
+
+    private void OnFindTextChanged(string? text)
+    {
+        _findText = text ?? string.Empty;
+        _findCursorIndex = -1;
+        _findDialogMessage = string.Empty;
+        _findDialogNoMatch = false;
+    }
+
+    private async Task OnFindDialogKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Enter", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(_findText))
+        {
+            await FindNextCoreAsync();
+        }
+        else if (string.Equals(e.Key, "Escape", StringComparison.Ordinal))
+        {
+            CloseFindDialog();
+        }
+    }
+
+    public Task<FlexTelemetryEventRow?> FindNextAsync(
+        string? queryOverride = null,
+        string? fieldOverride = null,
+        bool? matchCaseOverride = null,
+        bool? wholeWordOverride = null,
+        bool? searchDownOverride = null)
+    {
+        if (queryOverride is not null)
+            _findText = queryOverride;
+        if (fieldOverride is not null)
+            _findField = fieldOverride;
+        if (matchCaseOverride.HasValue)
+            _findMatchCase = matchCaseOverride.Value;
+        if (wholeWordOverride.HasValue)
+            _findMatchWholeWord = wholeWordOverride.Value;
+        return FindNextCoreAsync(searchDownOverride);
+    }
+
+    private async Task<FlexTelemetryEventRow?> FindNextCoreAsync(bool? searchDownOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(_findText))
+            return null;
+
+        bool down = searchDownOverride ?? _findSearchDown;
+        var rows = (_gridRef is not null ? _gridRef.GetFilteredRecords().ToList() : FilteredRows.ToList());
+        if (rows.Count == 0)
+        {
+            _findDialogNoMatch = true;
+            _findDialogMessage = $"No log rows in the current view to search.";
+            _findStatusBanner = _findDialogMessage;
+            return null;
+        }
+
+        var pattern = BuildWildcardPattern(_findText, _findMatchWholeWord);
+        var matchIndices = new List<int>();
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (RowMatchesFind(rows[i], _findField, pattern, _findMatchCase))
+                matchIndices.Add(i);
+        }
+
+        if (matchIndices.Count == 0)
+        {
+            _findMatchedRow = null;
+            _findDialogNoMatch = true;
+            _findDialogMessage = $"Cannot find \"{_findText}\"";
+            _findStatusBanner = _findDialogMessage;
+            RecordControlAction("FindNoMatch", _findText, _findField);
+            StateHasChanged();
+            return null;
+        }
+
+        int currentIdx = _findCursorIndex;
+        if (currentIdx < 0 && _selectedRow is not null)
+            currentIdx = rows.IndexOf(_selectedRow);
+
+        int chosenMatchOrdinal;
+        if (down)
+        {
+            chosenMatchOrdinal = matchIndices.FindIndex(idx => idx > currentIdx);
+            if (chosenMatchOrdinal < 0)
+                chosenMatchOrdinal = 0; // Wrap to top
+        }
+        else
+        {
+            chosenMatchOrdinal = matchIndices.FindLastIndex(idx => idx < (currentIdx < 0 ? rows.Count : currentIdx));
+            if (chosenMatchOrdinal < 0)
+                chosenMatchOrdinal = matchIndices.Count - 1; // Wrap to bottom
+        }
+
+        int targetRowIdx = matchIndices[chosenMatchOrdinal];
+        var matched = rows[targetRowIdx];
+        _findCursorIndex = targetRowIdx;
+        _findMatchedRow = matched;
+        _selectedRow = matched;
+        _findDialogNoMatch = false;
+        _findDialogMessage = $"Match {chosenMatchOrdinal + 1} of {matchIndices.Count:N0} — {matched.LogDate} {matched.TimeText} ({matched.LogType.Label})";
+        _findStatusBanner = $"Find \"{_findText}\": {chosenMatchOrdinal + 1}/{matchIndices.Count:N0}";
+
+        if (_gridRef is not null)
+        {
+            if (_activeGroupColumns.Count > 0)
+                await _gridRef.ExpandAllGroupAsync();
+            await _gridRef.SelectAndRevealRowAsync(matched, clearExistingSelection: true);
+        }
+
+        RecordControlAction("FindMatched", _findText, $"match={chosenMatchOrdinal + 1}/{matchIndices.Count}");
+        StateHasChanged();
+        return matched;
+    }
+
+    private async Task ApplyFindAsGridFilterAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_findText))
+            return;
+
+        _activeFindFilterText = _findText.Trim();
+        _findCursorIndex = -1;
+        var count = FilteredRows.Count;
+        _findStatusBanner = $"Filtered by Find \"{_activeFindFilterText}\" ({count:N0} rows)";
+        _findDialogVisible = false;
+        if (_gridRef is not null && _activeGroupColumns.Count > 0)
+            await _gridRef.ExpandAllGroupAsync();
+        RecordControlAction("FindAppliedAsFilter", _activeFindFilterText, $"rows={count}");
+    }
+
+    private void ClearFindFilter()
+    {
+        _activeFindFilterText = string.Empty;
+        _findStatusBanner = string.Empty;
+        _findMatchedRow = null;
+        _findCursorIndex = -1;
+        RecordControlAction("FindFilterCleared");
+    }
+
+    private static string BuildWildcardPattern(string findText, bool wholeWord)
+    {
+        var trimmed = findText.Trim();
+        if (wholeWord)
+            return $"* {trimmed} *";
+        if (trimmed.Contains('*') || trimmed.Contains('?'))
+            return trimmed.StartsWith('*') || trimmed.EndsWith('*') ? trimmed : $"*{trimmed}*";
+        return $"*{trimmed}*";
+    }
+
+    private static bool RowMatchesFind(FlexTelemetryEventRow row, string field, string pattern, bool matchCase)
+    {
+        if (string.Equals(field, AllColumnsField, StringComparison.Ordinal))
+        {
+            return FieldMatches(row.Summary, pattern, matchCase)
+                   || FieldMatches(row.LogType.Label, pattern, matchCase)
+                   || FieldMatches(row.LogDate.ToString(), pattern, matchCase)
+                   || FieldMatches(row.TimeText, pattern, matchCase)
+                   || FieldMatches(row.Level, pattern, matchCase)
+                   || FieldMatches(row.UserId, pattern, matchCase)
+                   || FieldMatches(row.Screen, pattern, matchCase)
+                   || FieldMatches(row.Action, pattern, matchCase)
+                   || FieldMatches(row.Control, pattern, matchCase)
+                   || FieldMatches(row.Value, pattern, matchCase)
+                   || FieldMatches(row.Location, pattern, matchCase)
+                   || FieldMatches(row.ControlType, pattern, matchCase)
+                   || FieldMatches(row.Tag, pattern, matchCase)
+                   || FieldMatches(row.Detail, pattern, matchCase)
+                   || FieldMatches(row.SqlStatement, pattern, matchCase);
+        }
+
+        var singleValue = field switch
+        {
+            nameof(FlexTelemetryEventRow.Summary) => row.Summary,
+            nameof(FlexTelemetryEventRow.LogType) => row.LogType.Label,
+            nameof(FlexTelemetryEventRow.LogDate) => row.LogDate.ToString(),
+            nameof(FlexTelemetryEventRow.TimeText) => row.TimeText,
+            nameof(FlexTelemetryEventRow.Level) => row.Level,
+            nameof(FlexTelemetryEventRow.UserId) => row.UserId,
+            nameof(FlexTelemetryEventRow.Screen) => row.Screen,
+            nameof(FlexTelemetryEventRow.Action) => row.Action,
+            nameof(FlexTelemetryEventRow.Control) => row.Control,
+            nameof(FlexTelemetryEventRow.Value) => row.Value,
+            nameof(FlexTelemetryEventRow.Location) => row.Location,
+            nameof(FlexTelemetryEventRow.ControlType) => row.ControlType,
+            nameof(FlexTelemetryEventRow.Tag) => row.Tag,
+            nameof(FlexTelemetryEventRow.Detail) => row.Detail,
+            _ => row.Summary
+        };
+        return FieldMatches(singleValue, pattern, matchCase);
+    }
+
+    private static bool FieldMatches(string? cellText, string pattern, bool matchCase)
+    {
+        if (string.IsNullOrEmpty(cellText))
+            return false;
+        var padded = " " + cellText + " ";
+        return matchCase
+            ? WildcardMatch(padded, pattern)
+            : WildcardMatch(padded.ToUpperInvariant(), pattern.ToUpperInvariant());
+    }
+
+    private static bool WildcardMatch(string text, string pattern)
+    {
+        int tIdx = 0, pIdx = 0;
+        int tStar = -1, pStar = -1;
+
+        while (tIdx < text.Length)
+        {
+            if (pIdx < pattern.Length && (pattern[pIdx] == '?' || pattern[pIdx] == text[tIdx]))
+            {
+                tIdx++;
+                pIdx++;
+            }
+            else if (pIdx < pattern.Length && pattern[pIdx] == '*')
+            {
+                pStar = pIdx++;
+                tStar = tIdx;
+            }
+            else if (pStar >= 0)
+            {
+                pIdx = pStar + 1;
+                tIdx = ++tStar;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        while (pIdx < pattern.Length && pattern[pIdx] == '*')
+            pIdx++;
+
+        return pIdx == pattern.Length;
+    }
+
+    // ── Theme, Standalone Data & Exports ────────────────────────────────────
 
     private async Task OnThemeChangedAsync(TelemetryTheme nextTheme)
     {
@@ -368,11 +1147,11 @@
     public async Task ExportCsvAsync(string filePrefix = "flexkit")
     {
         var rows = FilteredRows;
-        var sb = new StringBuilder(rows.Count * 180 + 160);
-        sb.AppendLine("Timestamp,Level,User,Division,Stream,ControlType,Action,Screen,Location,ControlId,Tag,Value,DwellSeconds,Detail");
+        var sb = new StringBuilder(rows.Count * 200 + 180);
+        sb.AppendLine("Date,Time,LogType,Level,Summary,User,Division,Stream,ControlType,Action,Screen,Location,ControlId,Tag,Value,Seconds,Detail");
         foreach (var r in rows)
         {
-            sb.AppendLine($"{Csv(r.TimestampLocal.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))},{Csv(r.Level)},{Csv(r.UserId)},{r.DivisionId},{Csv(r.Kind)},{Csv(r.ControlType)},{Csv(r.Action)},{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.Control)},{Csv(r.Tag)},{Csv(r.Value)},{Csv(r.DurationSeconds?.ToString("0.0", CultureInfo.InvariantCulture))},{Csv(r.Detail)}");
+            sb.AppendLine($"{Csv(r.LogDate.ToString())},{Csv(r.TimeText)},{Csv(r.LogType.Label)},{Csv(r.Level)},{Csv(r.Summary)},{Csv(r.UserId)},{r.DivisionId},{Csv(r.Kind)},{Csv(r.ControlType)},{Csv(r.Action)},{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.Control)},{Csv(r.Tag)},{Csv(r.Value)},{Csv(r.DurationSeconds?.ToString("0.00", CultureInfo.InvariantCulture))},{Csv(r.Detail)}");
         }
 
         var fileName = $"{filePrefix}-log-stream-{DateTime.Now:yyyyMMdd-HHmm}.csv";

@@ -12,6 +12,7 @@
     --fx-tel-code-bg: #ffffff;
     --fx-tel-code-fg: #001b44;
     --fx-tel-code-border: #7f9db9;
+    --fx-tel-find-hit: #fff3b0;
     --fx-tel-font: Tahoma, "Segoe UI", sans-serif;
 }
 
@@ -29,6 +30,7 @@
     --fx-tel-code-bg: #070b14;
     --fx-tel-code-fg: #7dd3fc;
     --fx-tel-code-border: #1e293b;
+    --fx-tel-find-hit: rgba(250, 204, 21, 0.22);
     --fx-tel-font: Inter, "Segoe UI", system-ui, sans-serif;
 }
 
@@ -46,25 +48,92 @@
     --fx-tel-code-bg: #0f172a;
     --fx-tel-code-fg: #e2e8f0;
     --fx-tel-code-border: #334155;
+    --fx-tel-find-hit: #fef08a;
     --fx-tel-font: "Segoe UI", system-ui, sans-serif;
 }
 
 .fx-log-root {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     height: 100%;
     min-height: 0;
     background: var(--fx-tel-bg);
     color: var(--fx-tel-text);
     font-family: var(--fx-tel-font);
     font-size: 12px;
+    outline: none;
 }
 
 .fx-log-toolbar-right {
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+.fx-log-summary-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 5px 8px;
+    background: var(--fx-tel-surface);
+    border: 1px solid var(--fx-tel-border);
+    flex-shrink: 0;
+}
+
+.fx-log-summary-stats {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.fx-log-stat-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 8px;
+    background: var(--fx-tel-surface-alt);
+    border: 1px solid var(--fx-tel-border);
+    font-size: 11.5px;
+}
+
+.fx-log-stat-lbl {
+    color: var(--fx-tel-muted);
+    font-size: 11px;
+}
+
+.fx-log-stat-err {
+    border-color: #dc2626;
+    color: #dc2626;
+}
+
+.fx-log-actions-right {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.fx-log-find-btn {
+    font-weight: 600;
+}
+
+.fx-log-clear-find-btn {
+    border-color: #d97706 !important;
+}
+
+.fx-log-find-status {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fx-tel-accent);
+    padding: 1px 6px;
+}
+
+.fx-log-type-bar {
+    flex-shrink: 0;
 }
 
 .fx-log-hist-card {
@@ -80,13 +149,26 @@
 }
 
 .fx-log-grid-pane {
-    flex: 1 1 56%;
-    min-height: 190px;
+    flex: 1 1 64%;
+    min-height: 220px;
+}
+
+.fx-log-grid-pane ::deep .fx-log-find-match td {
+    background: var(--fx-tel-find-hit) !important;
+    font-weight: 600;
+}
+
+.fx-log-grid-pane ::deep .fx-log-row-error td {
+    color: #b91c1c;
+}
+
+.fx-log-root.fx-tel-theme-grafana .fx-log-grid-pane ::deep .fx-log-row-error td {
+    color: #fca5a5;
 }
 
 .fx-log-inspector {
     flex: 0 0 auto;
-    max-height: 225px;
+    max-height: 200px;
     display: flex;
     flex-direction: column;
 }
@@ -97,7 +179,7 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
 }
 
 .fx-log-inspector-loc {
@@ -108,8 +190,8 @@
 
 .fx-log-json-pre {
     margin: 0;
-    padding: 8px 10px;
-    max-height: 145px;
+    padding: 7px 10px;
+    max-height: 125px;
     overflow: auto;
     background: var(--fx-tel-code-bg);
     color: var(--fx-tel-code-fg);
@@ -122,4 +204,72 @@
 
 .fx-log-root.fx-tel-theme-vb .fx-log-json-pre {
     box-shadow: inset 1px 1px 0 #808080, inset -1px -1px 0 #ffffff;
+}
+
+/* ── Find Dialog Form ── */
+.fx-log-find-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 2px;
+    font-size: 12px;
+}
+
+.fx-log-find-row {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    align-items: center;
+    gap: 8px;
+}
+
+.fx-log-find-lbl {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.fx-log-find-opts {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding-top: 2px;
+}
+
+.fx-log-find-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fx-log-find-dir {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border: 1px solid var(--fx-tel-border, #aca899);
+}
+
+.fx-log-find-dir-title {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--fx-tel-muted, #4a4942);
+}
+
+.fx-log-find-msg {
+    padding: 5px 8px;
+    border-radius: 2px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.fx-log-find-msg-ok {
+    background: rgba(22, 163, 74, 0.12);
+    color: #15803d;
+    border: 1px solid rgba(22, 163, 74, 0.35);
+}
+
+.fx-log-find-msg-warn {
+    background: rgba(220, 38, 38, 0.12);
+    color: #b91c1c;
+    border: 1px solid rgba(220, 38, 38, 0.35);
 }

@@ -1,9 +1,49 @@
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Components;
 
 namespace Fx.ControlKit.Telemetry;
+
+/// <summary>
+/// Sortable date group key for <see cref="LogControl"/> that formats as <c>yyyy-MM-dd</c> while sorting
+/// newest dates first by default in <c>GridControl</c> group headers.
+/// </summary>
+public readonly record struct TelemetryLogDateKey(DateOnly Date) : IComparable<TelemetryLogDateKey>, IComparable, IFormattable
+{
+    public int CompareTo(TelemetryLogDateKey other) => other.Date.CompareTo(Date);
+
+    public int CompareTo(object? obj) =>
+        obj is TelemetryLogDateKey other
+            ? CompareTo(other)
+            : string.Compare(ToString(), obj?.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public override string ToString() => Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    public string ToString(string? format, IFormatProvider? formatProvider) =>
+        Date.ToString(string.IsNullOrEmpty(format) ? "yyyy-MM-dd" : format, formatProvider ?? CultureInfo.InvariantCulture);
+}
+
+/// <summary>
+/// Logical log category key for <see cref="LogControl"/> that displays a human-readable category label
+/// while ordering critical categories (Errors, Screen Navigation, Button/Grid/Field actions, SQL, Session) cleanly.
+/// </summary>
+public readonly record struct TelemetryLogTypeKey(int Priority, string Label) : IComparable<TelemetryLogTypeKey>, IComparable
+{
+    public int CompareTo(TelemetryLogTypeKey other)
+    {
+        int c = Priority.CompareTo(other.Priority);
+        return c != 0 ? c : string.Compare(Label, other.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public int CompareTo(object? obj) =>
+        obj is TelemetryLogTypeKey other
+            ? CompareTo(other)
+            : string.Compare(Label, obj?.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public override string ToString() => Label ?? string.Empty;
+}
 
 /// <summary>
 /// Visual theme for <see cref="TelemetryControl"/>, <see cref="LogControl"/>, and sub-controls.
@@ -302,10 +342,77 @@ public sealed class FlexTelemetryEventRow
     public string? Value { get; set; }
     public string Detail { get; set; } = string.Empty;
     public double? DurationSeconds { get; set; }
+    public bool IsSqlRow { get; set; }
+    public string? SqlStatement { get; set; }
+    public string? SqlParameters { get; set; }
     public string CloudWatchJson { get; set; } = string.Empty;
     public string SerilogClefJson { get; set; } = string.Empty;
     public string CloudWatchJsonIndented { get; set; } = string.Empty;
     public string SerilogClefJsonIndented { get; set; } = string.Empty;
+
+    private DateTime EffectiveLocal =>
+        TimestampLocal == default ? TimestampUtc.ToLocalTime() : TimestampLocal;
+
+    public TelemetryLogDateKey LogDate => new(DateOnly.FromDateTime(EffectiveLocal));
+
+    public string TimeText => EffectiveLocal.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+
+    public TelemetryLogTypeKey LogType => ClassifyLogType(Kind, Level);
+
+    public string Summary => BuildSummary();
+
+    public static TelemetryLogTypeKey ClassifyLogType(string? kind, string? level)
+    {
+        if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(kind, "UnhandledError", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TelemetryLogTypeKey(1, "Error / Exception");
+        }
+
+        return (kind ?? string.Empty) switch
+        {
+            "ScreenOpen" or "ScreenFocus" or "ScreenClose" => new TelemetryLogTypeKey(2, "Screen Navigation"),
+            "ButtonClick" or "MenuAction" or "ShortcutKey" => new TelemetryLogTypeKey(3, "Button & Command"),
+            "GridOperation" => new TelemetryLogTypeKey(4, "Grid Activity"),
+            "ControlChange" => new TelemetryLogTypeKey(5, "Field / Input Edit"),
+            "TaskLaunch" or "ReportRun" or "InquiryRun" => new TelemetryLogTypeKey(6, "Task & Report"),
+            "SqlQuery" => new TelemetryLogTypeKey(7, "SQL Query"),
+            "Session" => new TelemetryLogTypeKey(8, "Session / Auth"),
+            _ => new TelemetryLogTypeKey(9, string.IsNullOrWhiteSpace(kind) ? "Application Event" : kind!)
+        };
+    }
+
+    private string BuildSummary()
+    {
+        if (IsSqlRow)
+        {
+            var status = string.Equals(Level, "ERROR", StringComparison.OrdinalIgnoreCase)
+                ? $"FAILED ({Detail})"
+                : (DurationSeconds.HasValue ? $"{DurationSeconds.Value * 1000:N0} ms" : "OK");
+            var tbl = string.IsNullOrWhiteSpace(Control) ? string.Empty : $" [{Control}]";
+            return $"SQL {Action}{tbl} — {status}";
+        }
+
+        var target = !string.IsNullOrWhiteSpace(Control) ? Control : (!string.IsNullOrWhiteSpace(Screen) ? Screen : ControlType);
+        var valPart = !string.IsNullOrWhiteSpace(Value) ? $" = {Value}" : string.Empty;
+        return Kind switch
+        {
+            "ScreenOpen" => $"Opened screen '{(!string.IsNullOrWhiteSpace(Screen) ? Screen : Route)}'",
+            "ScreenFocus" => $"Focused tab '{(!string.IsNullOrWhiteSpace(Screen) ? Screen : Route)}'",
+            "ScreenClose" => DurationSeconds.HasValue
+                ? $"Closed '{Screen}' (dwell {DurationSeconds.Value:N1}s)"
+                : $"Closed '{Screen}'",
+            "ButtonClick" or "MenuAction" => $"Clicked '{target}' ({Action}){valPart}",
+            "GridOperation" => $"Grid '{target}': {Action}{valPart}",
+            "ControlChange" => $"Changed '{target}'{valPart}",
+            "TaskLaunch" => $"Launched task '{target}'",
+            "ReportRun" => $"Ran report '{target}'",
+            "InquiryRun" => $"Ran inquiry '{target}'",
+            "Session" => $"Session {Action}{(!string.IsNullOrWhiteSpace(Detail) ? $" — {Detail}" : string.Empty)}",
+            "UnhandledError" => !string.IsNullOrWhiteSpace(Detail) ? $"Error: {Detail}" : $"Error in '{target}'",
+            _ => $"{ControlType} '{target}': {Action}{valPart}"
+        };
+    }
 }
 
 /// <summary>
@@ -457,6 +564,63 @@ public sealed class FlexSqlTelemetryEntry
             payload["error"] = ErrorMessage;
 
         return JsonSerializer.Serialize(payload, indented ? IndentedJson : CompactJson);
+    }
+
+    public string ToSerilogClefJson(bool indented = false)
+    {
+        var payload = new Dictionary<string, object?>(18, StringComparer.Ordinal)
+        {
+            ["@t"] = TimestampUtc.ToString("O"),
+            ["@l"] = HasError ? "Error" : (ElapsedMs >= 500 ? "Warning" : "Information"),
+            ["@mt"] = "SQL {StatementKind} on {Tables} ({ElapsedMs} ms)",
+            ["Tenant"] = Tenant,
+            ["UserId"] = string.IsNullOrWhiteSpace(UserId) ? "anonymous" : UserId,
+            ["SessionId"] = SessionId,
+            ["Screen"] = Screen,
+            ["EventKind"] = EventKind,
+            ["StatementKind"] = StatementKind,
+            ["Tables"] = Tables,
+            ["ElapsedMs"] = ElapsedMs,
+            ["RowCount"] = RowCount,
+            ["Source"] = Source,
+            ["Sql"] = Sql
+        };
+        if (!string.IsNullOrWhiteSpace(ErrorMessage))
+            payload["ErrorMessage"] = ErrorMessage;
+
+        return JsonSerializer.Serialize(payload, indented ? IndentedJson : CompactJson);
+    }
+
+    public FlexTelemetryEventRow ToEventRow()
+    {
+        var local = Timestamp == default ? TimestampUtc.ToLocalTime() : Timestamp;
+        var level = HasError ? "ERROR" : (ElapsedMs >= 500 ? "WARN" : "INFO");
+        var actionLabel = EventKind == FlexSqlEventKinds.Statement ? StatementKind : EventKind;
+        return new FlexTelemetryEventRow
+        {
+            TimestampUtc = TimestampUtc,
+            TimestampLocal = local,
+            Level = level,
+            UserId = string.IsNullOrWhiteSpace(UserId) ? "(system)" : UserId,
+            Tenant = Tenant,
+            SessionId = SessionId,
+            Kind = "SqlQuery",
+            ControlType = string.IsNullOrWhiteSpace(Source) ? "SqlClient" : Source,
+            Action = actionLabel,
+            Screen = string.IsNullOrWhiteSpace(Screen) ? "Database" : Screen,
+            Location = !string.IsNullOrWhiteSpace(Tables) ? $"{(string.IsNullOrWhiteSpace(Screen) ? "Database" : Screen)} > SQL:{Tables}" : "Database > SQL",
+            Control = Tables,
+            Value = RowCount.HasValue ? $"{RowCount.Value:N0} rows ({ElapsedMs:N0} ms)" : $"{ElapsedMs:N0} ms",
+            Detail = HasError ? $"{ErrorClass}: {ErrorMessage}" : SqlPreview,
+            DurationSeconds = Math.Round(ElapsedMs / 1000.0, 3),
+            IsSqlRow = true,
+            SqlStatement = Sql,
+            SqlParameters = Parameters,
+            CloudWatchJson = ToCloudWatchJson(indented: false),
+            CloudWatchJsonIndented = ToCloudWatchJson(indented: true),
+            SerilogClefJson = ToSerilogClefJson(indented: false),
+            SerilogClefJsonIndented = ToSerilogClefJson(indented: true)
+        };
     }
 }
 

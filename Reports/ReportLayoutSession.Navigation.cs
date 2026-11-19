@@ -90,18 +90,14 @@ public sealed partial class ReportLayoutSession
 
     private static object CopyNavigationParameterValue(object value, int depth = 0)
     {
-        if (value is Array) return CopyNavigationValue(value, depth);
+        if (value is byte[] or Array { Rank: not 1 }) return CopyNavigationValue(value, depth);
         if (value is string || value is not System.Collections.IEnumerable items) return value;
         if (depth >= 32) throw new InvalidDataException("Report parameter arrays exceed the supported nesting depth.");
-        // Formula evaluation already treats enumerable prompt values as arrays. Capture them once,
-        // with the same item limit, so a caller's later List mutation cannot change a drill run.
-        var copy = new List<object>();
-        foreach (var item in items)
-        {
-            if (copy.Count >= 100_000) throw new InvalidDataException("Array value exceeds the formula engine limit.");
-            copy.Add(CopyNavigationParameterValue(item!, depth + 1));
-        }
-        return copy.ToArray();
+        // Formula evaluation treats enumerable prompt values as arrays. Capture each once, whatever its length, as the array the
+        // formulas read (no copy per read), so a caller's later change cannot reach the run or a drill run.
+        var copy = new List<object>(items is System.Collections.ICollection collection ? collection.Count : 0);
+        foreach (var item in items) copy.Add(CopyNavigationParameterValue(item!, depth + 1));
+        return CrystalFormula.Held(copy.ToArray());
     }
 
     private static Dictionary<string, object> CopyNavigationParameters(IReadOnlyDictionary<string, object>? parameters)

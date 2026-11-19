@@ -61,7 +61,6 @@ public static class ReportRangeParameters
         {
             var ranges = Ranges(value);
             if (value is not CrystalRange && value is not IEnumerable<CrystalRange>) continue;
-            if (ranges.Length > 100) throw new InvalidDataException("At most 100 ranges are supported.");
             result.Remove(name);
             void Add(string key, object item)
             {
@@ -78,5 +77,22 @@ public static class ReportRangeParameters
             }
         }
         return result;
+    }
+
+    private static readonly string[] Bounds = ["_Start", "_End", "_IncludeStart", "_IncludeEnd"];
+
+    /// <summary>The names <see cref="BindSql"/> wrote for the ranges among <paramref name="parameters"/>.</summary>
+    internal static IEnumerable<string> BoundNames(IDictionary<string, object> parameters)
+    {
+        foreach (var (key, value) in parameters.ToArray())
+        {
+            if (!key.EndsWith("_Count", StringComparison.OrdinalIgnoreCase) || value is not int count || count < 0) continue;
+            var name = key[..^"_Count".Length];
+            var names = Enumerable.Range(0, count).SelectMany(index => Bounds.Select(bound => $"{name}_{index}{bound}"))
+                .Concat(count == 1 ? Bounds.Select(bound => name + bound) : []).Where(parameters.ContainsKey).ToArray();
+            if (names.Length == 0 && count > 0) continue;
+            yield return key;
+            foreach (var bound in names) yield return bound;
+        }
     }
 }

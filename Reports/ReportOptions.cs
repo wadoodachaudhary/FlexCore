@@ -30,9 +30,11 @@ public class ReportOptions
 
     /// <summary>
     /// Parameter names that the renderer should auto-inject from session state
-    /// (via <see cref="IReportSessionContext"/>) when the report's SQL
-    /// references them but the caller didn't supply a value. Comparison is
-    /// case-insensitive. Empty by default — the host populates this with its
+    /// (via <see cref="IReportSessionContext"/>) when the report declares or uses
+    /// them and the caller supplied no value. These values answer the prompt on open
+    /// and remain supplied on Refresh and Parameters. Other eligible inputs can be edited;
+    /// the host is responsible for enforcing access when it executes the report.
+    /// Comparison is case-insensitive. Empty by default — the host populates this with its
     /// own well-known session keys (e.g. a multi-tenancy id, user id, locale).
     ///
     /// <para>Example wiring in the host's <c>Program.cs</c>:</para>

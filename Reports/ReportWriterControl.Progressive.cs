@@ -334,7 +334,7 @@ public partial class ReportWriterControl
             return ExecuteReportData(definition, parameters);
         if (parameters is not null) parameters = ReportRangeParameters.BindSql(new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase));
         if (definition.PositionedSqlSelection is not null) parameters ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-        var execution = definition.PrepareSqlExecution(parameters);
+        var execution = definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db));
         return await asynchronous.ExecuteAsync(execution.Sql, parameters, cancellationToken);
     }
 

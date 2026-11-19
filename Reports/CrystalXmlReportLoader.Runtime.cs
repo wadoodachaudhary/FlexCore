@@ -121,7 +121,7 @@ public partial class CrystalXmlReportLoader
         // session separately preserves parameterized subreport field-link filters.
         // Do not fall back to the broader legacy regex formula-to-SQL translator.
         definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), orderRows ? PositionedOrderBySql(report, definition) : "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
+            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition, _options.SchemaPrefix), orderRows ? PositionedOrderBySql(report, definition) : "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
                 useDistinct: Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords"));
         if (definition.PositionedIntegerSelection is { } integers)
             definition.PositionedIntegerSelection = integers.WithTemplate(definition.Sql);

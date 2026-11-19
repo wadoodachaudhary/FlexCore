@@ -10,8 +10,13 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 internal sealed class ReportSqlTextSelectionPlan(IReadOnlyList<ReportSqlTextSelectionPlan.Binding> bindings, string templateSql)
 {
-    /// <summary>One emitted selector: the parameter names it reads, the guarded clause as generated and the direct comparison.</summary>
-    internal sealed record Binding(string[] Names, string GuardedClause, string DirectClause);
+    /// <summary>One emitted selector: the parameter names it reads, the guarded clause as generated and the direct comparison.
+    /// <see cref="Members"/> holds the values of a list the request reads back from one value, whose names it no longer binds.
+    /// <see cref="Column"/> is the table or view column the direct comparison reads; without one the selector stays guarded.</summary>
+    internal sealed record Binding(string[] Names, string GuardedClause, string DirectClause, IReadOnlyList<string>? Members = null)
+    {
+        internal ReportTextColumn? Column { get; init; }
+    }
 
     internal string TemplateSql { get; } = templateSql;
 
@@ -27,27 +32,43 @@ internal sealed class ReportSqlTextSelectionPlan(IReadOnlyList<ReportSqlTextSele
         var replacement = "IN (" + string.Join(", ", names.Select(expanded => "@" + expanded)) + ")";
         // Both forms change together, or neither: a guarded clause the rewriter did not expand keeps its scalar direct form.
         var expandedBindings = bindings.Select(binding => binding.Names.Length == 1 && binding.Names[0].Equals(name, StringComparison.OrdinalIgnoreCase) && pattern.IsMatch(binding.GuardedClause)
-            ? new Binding(names, pattern.Replace(binding.GuardedClause, replacement), pattern.Replace(binding.DirectClause, replacement))
+            ? binding with { Names = names, GuardedClause = pattern.Replace(binding.GuardedClause, replacement), DirectClause = pattern.Replace(binding.DirectClause, replacement) }
             : binding).ToList();
         return new(expandedBindings, TemplateSql);
     }
 
+    /// <summary>The plan after the list whose members are <paramref name="names"/> was bound as one value: its selector's clauses
+    /// read the list as <paramref name="rewrite"/> rewrote the query, and the list's <paramref name="values"/> decide the direct
+    /// comparison. A selector that reads other names too keeps its guarded form.</summary>
+    internal ReportSqlTextSelectionPlan WithList(IReadOnlySet<string> names, Func<string, string> rewrite, IReadOnlyList<string> values)
+        => new(bindings.Where(binding => !binding.Names.Any(names.Contains) || binding.Names.All(names.Contains))
+            .Select(binding => binding.Names.Length > 0 && binding.Names.All(names.Contains)
+                ? binding with { Names = [], GuardedClause = rewrite(binding.GuardedClause), DirectClause = rewrite(binding.DirectClause), Members = values } : binding)
+            .ToList(), TemplateSql);
+
     /// <summary>
     /// <paramref name="sql"/> with each selector whose values are all printable ASCII strings compared directly.
-    /// <paramref name="template"/> is the generated SQL the plan belongs to; caller-replaced SQL is left untouched.
+    /// <paramref name="template"/> is the generated SQL the plan belongs to; caller-replaced SQL is left untouched. Only a selector
+    /// on a table or view column that <paramref name="caseInsensitive"/> accepts (any, when null) compares directly.
     /// </summary>
-    internal string Prepare(string sql, string template, IDictionary<string, object>? parameters)
+    internal string Prepare(string sql, string template, IDictionary<string, object>? parameters, Func<ReportTextColumn, bool>? caseInsensitive = null)
     {
         if (template != TemplateSql || parameters is null) return sql;
+        // Every caller key by its SQL-sanitized name, built once: the first key and how many keys share that name.
+        var sanitized = new Dictionary<string, (int Count, KeyValuePair<string, object> First)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in parameters)
+        {
+            var key = ReportSqlSelectionPlan.Sanitized(pair.Key);
+            sanitized[key] = sanitized.TryGetValue(key, out var seen) ? (seen.Count + 1, seen.First) : (1, pair);
+        }
         foreach (var binding in bindings)
         {
-            var direct = true;
-            foreach (var name in binding.Names)
+            var direct = binding.Column is { } column && (caseInsensitive?.Invoke(column) ?? true) && (binding.Members?.All(PrintableAscii) ?? true);
+            foreach (var name in binding.Members is null ? binding.Names : [])
             {
                 // SQL sanitization must not turn a second caller key into this name.
-                var matches = parameters.Where(pair => Sanitized(pair.Key).Equals(name, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
-                if (matches.Length != 1 || !matches[0].Key.Equals(name, StringComparison.OrdinalIgnoreCase)
-                    || matches[0].Value is not string value || !PrintableAscii(value)) { direct = false; break; }
+                if (!sanitized.TryGetValue(name, out var match) || match.Count != 1 || !match.First.Key.Equals(name, StringComparison.OrdinalIgnoreCase)
+                    || match.First.Value is not string value || !PrintableAscii(value)) { direct = false; break; }
             }
             if (!direct) continue;
             // Another authored Command table could contain identical text; only an unambiguous single emitted clause changes.
@@ -65,5 +86,4 @@ internal sealed class ReportSqlTextSelectionPlan(IReadOnlyList<ReportSqlTextSele
         return true;
     }
 
-    private static string Sanitized(string name) => new(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
 }

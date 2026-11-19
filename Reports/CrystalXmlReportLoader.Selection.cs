@@ -9,7 +9,7 @@ public partial class CrystalXmlReportLoader
     /// Narrows SQL to a proven superset of positioned record selection. The full
     /// Crystal AST remains on the layout and is always evaluated on returned rows.
     /// </summary>
-    private static string PositionedSelectionSql(XElement report, ReportDefinition definition)
+    private static string PositionedSelectionSql(XElement report, ReportDefinition definition, string? schemaPrefix)
     {
         var layout = definition.PositionedLayout!;
         var parameters = definition.Parameters;
@@ -70,17 +70,13 @@ public partial class CrystalXmlReportLoader
                 // either non-ASCII operand deliberately passes through for runtime filtering.
                 // Convert before COLLATE so a varchar code-page change cannot erase that guard.
                 // This bounds returned ASCII identifiers; no index/performance claim is made.
-                var textType = SelectionTextType(matchedFields[0]);
-                var textColumn = $"CONVERT({textType}, {column})";
-                var textArgument = $"CONVERT({textType}, {argument})";
-                var guarded = IncludeNullCandidate($"({textColumn} COLLATE Latin1_General_100_CI_AS = {textArgument} COLLATE Latin1_General_100_CI_AS"
-                    + $" OR {textColumn} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%'"
-                    + $" OR {textArgument} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%')", column, layout.ConvertDatabaseNullToDefault);
+                var guarded = ReportSelectionSql.PromptEquality(column, matchedFields[0], argument, layout.ConvertDatabaseNullToDefault);
                 clauses.Add(guarded);
                 // Printable-ASCII values compare the column directly at execution (ReportSqlTextSelectionPlan), in the column's own
                 // collation, as the original engine's query does; only a bounded character column is compared that way.
-                if (DirectTextComparable(matchedFields[0]))
-                    textBindings.Add(new([exposed[0].Name], guarded, IncludeNullCandidate($"{column} = {argument}", column, layout.ConvertDatabaseNullToDefault)));
+                if (ReportSelectionSql.DirectTextComparable(matchedFields[0]))
+                    textBindings.Add(new([exposed[0].Name], guarded, ReportSelectionSql.DirectEquality(column, exposed[0].Name, layout.ConvertDatabaseNullToDefault))
+                        { Column = TextColumn(matchedTables[0], matchedFields[0], schemaPrefix) });
             }
             else return ""; // Dates/date coercion, floating-point, currency and unknown types are not proven here.
         }
@@ -107,56 +103,11 @@ public partial class CrystalXmlReportLoader
         var guarded = $"({numericText} COLLATE Latin1_General_100_BIN2 LIKE N'%[^0-9]%' OR {integer} IS NULL OR {column} = {integer})";
         var range = IntegralSelectionRange(fieldTypeName, field)
             ?? throw new InvalidDataException("Integral selector range was not proven.");
-        return new(parameterName, IncludeNullCandidate(guarded, column, convertNulls),
-            IncludeNullCandidate($"{column} = {argument}", column, convertNulls), range.Minimum, range.Maximum);
+        return new(parameterName, ReportSelectionSql.IncludeNullCandidate(guarded, column, convertNulls),
+            ReportSelectionSql.DirectEquality(column, parameterName, convertNulls), range.Minimum, range.Maximum);
     }
-
-    // SQL NULL is not equal to a Crystal type default. Keep it for the full runtime predicate.
-    private static string IncludeNullCandidate(string clause, string column, bool convertNulls)
-        => convertNulls ? $"({clause} OR {column} IS NULL)" : clause;
 
     private static bool SqlSelectionIdentifier(string value) => Regex.IsMatch(value, @"\A[A-Za-z_][A-Za-z0-9_]*\z");
-
-    /// <summary>
-    /// The Unicode type the guarded selection compares in. nvarchar(max) made every comparison a LOB operation and
-    /// collapsed the optimizer's estimates to one row (the guards then ran inside nested loops: one sample report
-    /// spent 2.5 of its 4.1 query seconds there); nvarchar(4000) keeps the code-page guard with the same result for
-    /// every column that fits, and a wider column keeps max.
-    /// </summary>
-    internal static string SelectionTextType(System.Xml.Linq.XElement? field)
-    {
-        var bounded = false;
-        foreach (var name in new[] { "Length", "NumberOfBytes" })
-        {
-            if (field?.Attribute(name) is not { } attribute) continue;
-            if (!int.TryParse(attribute.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var size)
-                || size <= 0 || size > 4000)
-                return "nvarchar(max)";
-            bounded = true;
-        }
-        return bounded ? "nvarchar(4000)" : "nvarchar(max)";
-    }
-
-    // Saved report widths can lag a widened database column. Preserve oversized
-    // candidates for runtime evaluation rather than comparing truncated text.
-    private static string SelectionLengthEscape(System.Xml.Linq.XElement? field, string column)
-        => SelectionTextType(field) == "nvarchar(4000)"
-            ? $"DATALENGTH(CONVERT(nvarchar(max), {column})) > 8000 OR " : "";
-
-    /// <summary>
-    /// Whether a text selector may compare the column directly at execution. Only a bounded character width can be trusted to
-    /// be a character column: the converter declares uniqueidentifier columns as 74-byte strings and memo, xml and text columns
-    /// as unbounded ones, and a direct comparison against those converts the parameter to the column's type instead. Anything
-    /// else keeps the CONVERT guard, which compares as text whatever the column is.
-    /// </summary>
-    internal static bool DirectTextComparable(System.Xml.Linq.XElement? field)
-    {
-        if (SelectionTextType(field) != "nvarchar(4000)") return false;
-        foreach (var name in new[] { "Length", "NumberOfBytes" })
-            if (int.TryParse((string?)field?.Attribute(name), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var size) && size == 74)
-                return false;
-        return true;
-    }
 
     private static bool IntegralSelectionField(string name)
         => IntegralSelectionType(name) is "long" or "short" or "byte" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s";
@@ -184,4 +135,27 @@ public partial class CrystalXmlReportLoader
             "int64s" => (long.MinValue, long.MaxValue),
             _ => null
         };
+    /// <summary>The column a direct text comparison reads, as the query names its table: one or two parts, never a Command, a
+    /// temporary table or a table of another database. Null for any other source.</summary>
+    private static ReportTextColumn? TextColumn(XElement table, XElement field, string? schemaPrefix)
+    {
+        var name = (string?)table.Attribute("Name");
+        var column = (string?)field.Attribute("Name");
+        if (table.Element("Command") is not null || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(column)) return null;
+        var qualified = (string?)table.Attribute("QualifiedName");
+        string? schema;
+        if (!string.IsNullOrWhiteSpace(qualified) && qualified.Contains('.'))
+        {
+            var parts = qualified.Split('.').Select(part => part.Trim().Trim('[', ']')).ToArray();
+            if (parts.Length != 2) return null;
+            (schema, name) = (parts[0], parts[1]);
+        }
+        else
+        {
+            schema = string.IsNullOrWhiteSpace(schemaPrefix) ? null : schemaPrefix.Trim();
+            if (schema is not null && schema.Contains('.')) return null;
+            schema = schema?.Trim('[', ']');
+        }
+        return name.StartsWith('#') ? null : new(schema, name, column);
+    }
 }

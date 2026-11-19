@@ -34,6 +34,8 @@ public class ReportDefinition
     public string Sql { get; set; } = "";
 
     internal IReadOnlyList<string> ExpandedSqlStringParameters { get; set; } = [];
+    /// <summary>The lists bound one parameter per member; each request decides whether they still do (<see cref="ReportSqlRequest"/>).</summary>
+    internal IReadOnlyList<ReportSqlList> SqlLists { get; set; } = [];
 
     /// <summary>
     /// Validates actual values required by positioned SQL narrowing. Call before
@@ -62,15 +64,28 @@ public class ReportDefinition
     /// Re-preparing this copy uses its original guarded template, unless the
     /// caller has replaced its SQL, in which case that SQL is left untouched.
     /// </summary>
-    public ReportDefinition PrepareSqlExecution(IDictionary<string, object>? parameters)
+    public ReportDefinition PrepareSqlExecution(IDictionary<string, object>? parameters) => PrepareSqlExecution(parameters, null);
+
+    /// <summary>
+    /// <see cref="PrepareSqlExecution(IDictionary{string, object}?)"/> for an executor that declares <paramref name="options"/>.
+    /// A guarded text selector compares the column directly only when the executor declares case-insensitive text columns.
+    /// </summary>
+    public ReportDefinition PrepareSqlExecution(IDictionary<string, object>? parameters, ReportSqlExecutionOptions? options)
     {
-        ValidateSqlParameters(parameters);
         var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
         var copy = (ReportDefinition)MemberwiseClone();
         copy.PositionedSqlSelection = PositionedSqlSelection?.Clone();
-        var sql = PositionedTextSelection?.Prepare(template, template, parameters) ?? template;
-        copy.Sql = PositionedIntegerSelection?.Prepare(sql, template, parameters) ?? sql;
-        copy._preparedSqlTemplate = template;
+        // The request is fitted to the server against these final parameters; a request within the limit is unchanged.
+        var fitted = parameters is null ? template : ReportSqlRequest.Fit(copy, template, parameters);
+        if (!ReferenceEquals(fitted, template))
+        {
+            if (copy.PositionedTextSelection?.TemplateSql == template) copy.PositionedTextSelection = copy.PositionedTextSelection.WithTemplate(fitted);
+            if (copy.PositionedIntegerSelection?.TemplateSql == template) copy.PositionedIntegerSelection = copy.PositionedIntegerSelection.WithTemplate(fitted);
+        }
+        copy.ValidateSqlParameters(parameters);
+        var sql = options?.CaseInsensitiveTextColumns == true ? copy.PositionedTextSelection?.Prepare(fitted, fitted, parameters, options.CaseInsensitiveColumn) ?? fitted : fitted;
+        copy.Sql = copy.PositionedIntegerSelection?.Prepare(sql, fitted, parameters) ?? sql;
+        copy._preparedSqlTemplate = fitted;
         copy._preparedSql = copy.Sql;
         return copy;
     }
@@ -484,6 +499,9 @@ public class ReportParameter
     /// record-selection binding.
     /// </summary>
     public bool PickListIsAuthored { get; set; }
+
+    // A list synthesized from a selection formula is a suggestion. An explicit PickListSql remains authoritative.
+    internal bool PickListIsInferred { get; set; }
 
     /// <summary>
     /// Table the parameter is bound to in the Crystal RecordSelectionFormula

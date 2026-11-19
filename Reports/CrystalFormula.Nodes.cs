@@ -26,6 +26,18 @@ public sealed partial class CrystalFormula
         public void Loop() { if (++Budget.Loops > Budget.MaxLoops) throw new InvalidDataException($"A loop was evaluated more than the maximum number of times allowed ({Budget.MaxLoops:N0})."); }
         public IDictionary<string, object?> Variables(string scope) => scope switch { "shared" => Context.SharedVariables, "global" => Context.GlobalVariables, _ => Locals };
         public object? Read(Binding binding) => Variables(binding.Scope).TryGetValue(binding.Name, out var value) ? value : TypeDefault(binding);
+        // The array each reference last read from a host collection: while the host hands back the same collection, the formula
+        // reads that array again for one step; another collection is read anew and costs its length, as any array built is.
+        private Dictionary<string, (object Source, object? Value)>? _hostValues;
+        public object? HostReference(string name, object value, Func<object?> read)
+        {
+            _hostValues ??= new(StringComparer.OrdinalIgnoreCase);
+            if (_hostValues.TryGetValue(name, out var known) && ReferenceEquals(known.Source, value)) return known.Value;
+            var result = read();
+            if (result is object?[] { Length: > 16 } array) Tick(array.Length >> 4);
+            _hostValues[name] = (value, result);
+            return result;
+        }
         public object? Write(Binding binding, object? value)
         {
             // An unhandled null aborts the formula before its assignment. In
@@ -57,9 +69,12 @@ public sealed partial class CrystalFormula
         public object? Get(Frame f)
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
-            return Account(f, Eval(f));
+            return Charge(f, Eval(f));
         }
         protected abstract object? Eval(Frame f);
+        /// <summary>The steps the node's result costs: its size where the node built it (<see cref="Account"/>), one step where it only
+        /// hands back a value held elsewhere (<see cref="Held"/>).</summary>
+        protected virtual object? Charge(Frame f, object? value) => Account(f, value);
         public virtual IEnumerable<Node> Children => [];
     }
     private static object? Account(Frame f, object? value)
@@ -73,14 +88,58 @@ public sealed partial class CrystalFormula
         else if (value is object?[] { Length: > 16 } array) f.Tick(array.Length >> 4);
         return value;
     }
+    // Text a concatenation built within Crystal's own string limit costs a step per 4,096 characters, so a loop that joins
+    // values one at a time into such a text stays within the budget; any other text costs a step per 256 characters.
+    private static object? Joined(Frame f, string op, object? value)
+    {
+        if (op is not ("&" or "+") || value is not string { Length: > 256 and <= CrystalTextLength } text) return Account(f, value);
+        f.Tick(1 + (text.Length >> 12));
+        return value;
+    }
+    // A reference or a variable read hands back the value it holds: no work in proportion to its size. What reads the text
+    // through (a comparison, a conversion, a function) pays for it (Scan).
+    private static object? Held(Frame f, object? value)
+    {
+        f.Tick();
+        return value is string { Length: > MaxTextLength } ? throw TextTooLong() : value;
+    }
+    /// <summary>Charges reading <paramref name="characters"/> characters of text, at the rate text a node builds costs.</summary>
+    private static void Scan(Frame? f, long characters)
+    {
+        if (f is not null && characters > 256) f.Tick((int)Math.Min(characters >> 8, int.MaxValue));
+    }
+    /// <summary>A test or a number read from a value: text is read through to convert it, and that much is charged.</summary>
+    private static bool Boolean(Frame f, object? value)
+    {
+        Scan(f, (value as string)?.Length ?? 0);
+        return Boolean(value);
+    }
+    private static decimal Number(Frame f, object? value)
+    {
+        Scan(f, (value as string)?.Length ?? 0);
+        return Number(value);
+    }
+    private const int CrystalTextLength = 65_534;
     private static InvalidDataException TextTooLong() => new("Formula text result exceeds 1 MB.");
     private sealed record Literal(object? Value) : Node { protected override object? Eval(Frame f) => Value; }
     private sealed record DefaultValue(object? Value) : Node { protected override object? Eval(Frame f) => Value ?? f.Default; }
-    private sealed record Reference(string Name) : Node { protected override object? Eval(Frame f) => Declared(f, Name, HostValue(f.Context.Resolve(Name))); }
+    private sealed record Reference(string Name) : Node
+    {
+        protected override object? Charge(Frame f, object? value) => Held(f, value);
+        protected override object? Eval(Frame f)
+        {
+            var value = f.Context.Resolve(Name);
+            return value is string or byte[] || value is not System.Collections.IEnumerable ? Declared(f, Name, value)
+                : f.HostReference(Name, value, () => Declared(f, Name, HostValue(value)));
+        }
+    }
     private sealed record Symbol(string Name) : Node { protected override object? Eval(Frame f) => SymbolValue(f, Name); }
     private sealed record Variable(Binding Binding, Node? Value) : Node
     {
         public override IEnumerable<Node> Children => Value is null ? [] : [Value];
+        // A read hands back the variable's value; an assignment keeps the value its expression built, already charged, and
+        // copies an array into the variable.
+        protected override object? Charge(Frame f, object? value) => Value is null || value is not object?[] ? Held(f, value) : Account(f, value);
         protected override object? Eval(Frame f)
         {
             if (Value is not null) return f.Write(Binding, Value.Get(f));
@@ -89,10 +148,15 @@ public sealed partial class CrystalFormula
             return current;
         }
     }
-    private sealed record VarRef(Binding Binding) : Node { protected override object? Eval(Frame f) => f.Read(Binding); }
+    private sealed record VarRef(Binding Binding) : Node
+    {
+        protected override object? Charge(Frame f, object? value) => Held(f, value);
+        protected override object? Eval(Frame f) => f.Read(Binding);
+    }
     private sealed record Assign(Binding Binding, Node Value) : Node
     {
         public override IEnumerable<Node> Children => [Value];
+        protected override object? Charge(Frame f, object? value) => value is object?[] ? Account(f, value) : Held(f, value);
         protected override object? Eval(Frame f) => f.Write(Binding, Value.Get(f));
     }
     private sealed record ElementAssign(Binding Binding, Node Index, Node Value) : Node
@@ -136,7 +200,7 @@ public sealed partial class CrystalFormula
         {
             for (var node = this; ; f.Tick())
             {
-                if (Boolean(f.NonNull(node.Test.Get(f)))) return node.Yes.Get(f);
+                if (Boolean(f, f.NonNull(node.Test.Get(f)))) return node.Yes.Get(f);
                 if (node.No is not Conditional next) return node.No.Get(f);
                 node = next;
             }
@@ -160,12 +224,12 @@ public sealed partial class CrystalFormula
         public override IEnumerable<Node> Children => [Test, Body];
         protected override object? Eval(Frame f)
         {
-            while (!TestFirst || Boolean(f.NonNull(Test.Get(f))))
+            while (!TestFirst || Boolean(f, f.NonNull(Test.Get(f))))
             {
                 f.Loop();
                 try { Body.Get(f); }
                 catch (ExitLoopException exit) when (!exit.ForLoop) { break; }
-                if (!TestFirst && !Boolean(f.NonNull(Test.Get(f)))) break;
+                if (!TestFirst && !Boolean(f, f.NonNull(Test.Get(f)))) break;
             }
             return true;
         }
@@ -175,9 +239,9 @@ public sealed partial class CrystalFormula
         public override IEnumerable<Node> Children => Step is null ? [Start, End, Body] : [Start, End, Step, Body];
         protected override object? Eval(Frame f)
         {
-            var current = Number(f.NonNull(Start.Get(f)));
-            var end = Number(f.NonNull(End.Get(f)));
-            var step = Step is null ? 1m : Number(f.NonNull(Step.Get(f)));
+            var current = Number(f, f.NonNull(Start.Get(f)));
+            var end = Number(f, f.NonNull(End.Get(f)));
+            var step = Step is null ? 1m : Number(f, f.NonNull(Step.Get(f)));
             if (step == 0) return true;
             while (true)
             {
@@ -186,7 +250,7 @@ public sealed partial class CrystalFormula
                 f.Loop();
                 try { Body.Get(f); }
                 catch (ExitLoopException exit) when (exit.ForLoop) { break; }
-                current = Number(f.NonNull(f.Read(Binding))) + step;
+                current = Number(f, f.NonNull(f.Read(Binding))) + step;
             }
             return true;
         }
@@ -196,7 +260,11 @@ public sealed partial class CrystalFormula
     private sealed record Unary(string Op, Node Value) : Node
     {
         public override IEnumerable<Node> Children => [Value];
-        protected override object? Eval(Frame f) => Op switch { "not" => !Boolean(f.NonNull(Value.Get(f))), "-" => -Number(f.NonNull(Value.Get(f))), _ => Number(f.NonNull(Value.Get(f))) };
+        protected override object? Eval(Frame f)
+        {
+            var value = f.NonNull(Value.Get(f));
+            return Op switch { "not" => !Boolean(f, value), "-" => -Number(f, value), _ => Number(f, value) };
+        }
     }
     private sealed record Values(Node[] Nodes) : Node
     {
@@ -250,25 +318,38 @@ public sealed partial class CrystalFormula
     private sealed record Binary(Node First, Step[] Steps) : Node
     {
         public override IEnumerable<Node> Children => Steps.Select(s => s.Right).Prepend(First);
+        protected override object? Charge(Frame f, object? value) => Joined(f, Steps[^1].Op, value);
         protected override object? Eval(Frame f)
         {
             var value = First.Get(f);
             for (var i = 0; i < Steps.Length; i++)
             {
-                if (i > 0) Account(f, value);
+                if (i > 0) Joined(f, Steps[i - 1].Op, value);
                 value = Apply(f, Steps[i].Op, f.NonNull(value), i == 0 ? First : null, Steps[i].Right);
             }
             return value;
         }
     }
+    // The text an operator reads through on top of the result it builds: an ordering compares up to the shorter text, a prefix
+    // test up to the prefix, arithmetic and logic convert every text operand. Equality pays in Same; a concatenation pays by
+    // its result; like and in search with their own meter.
+    private static long OperandText(string op, object? a, object? b) => op switch
+    {
+        "=" or "<>" or "!=" or "&" or "like" or "in" => 0,
+        "+" when a is string || b is string => 0,
+        "<" or ">" or "<=" or ">=" when a is string x && b is string y => Math.Min(x.Length, y.Length),
+        "startswith" => a is string text ? (AsArray(b) ?? [b]).Sum(prefix => prefix is string p ? (long)Math.Min(text.Length, p.Length) : 0) : 0,
+        _ => ((a as string)?.Length ?? 0L) + ((b as string)?.Length ?? 0L)
+    };
     /// <summary>One operator step; <paramref name="left"/> is the left operand's expression when it is a single node (always, for comparisons).</summary>
     private static object? Apply(Frame f, string op, object? a, Node? left, Node right)
     {
-        if (op == "and") return Boolean(a) && Boolean(f.NonNull(right.Get(f)));
-        if (op == "or") return Boolean(a) || Boolean(f.NonNull(right.Get(f)));
+        if (op == "and") return Boolean(f, a) && Boolean(f, f.NonNull(right.Get(f)));
+        if (op == "or") return Boolean(f, a) || Boolean(f, f.NonNull(right.Get(f)));
         var b = f.NonNull(right.Get(f));
         if (AsArray(b) is { } items) f.Tick(items.Length);
         if (AsArray(a) is { } operands) f.Tick(operands.Length);
+        Scan(f, OperandText(op, a, b));
         var sides = new Sides(f, left, right);
         return op switch
         {

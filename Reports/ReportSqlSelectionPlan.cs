@@ -4,6 +4,9 @@ namespace Fx.ControlKit.Reports;
 internal sealed class ReportSqlSelectionPlan
 {
     internal const string ReservedPrefix = "__fxPositionedSelection";
+    /// <summary>The parameters one request may carry: SQL Server accepts 2,100 in a call, and the client's sp_executesql call uses two of them.
+    /// It never limits a selection: it only decides when a request stops binding a list one parameter per member (<see cref="ReportSqlRequest"/>).</summary>
+    internal const int MaxRequestParameters = 2098;
     internal List<string> Dates { get; } = [];
     internal List<string> Integers { get; } = [];
     internal List<StringBinding> Strings { get; } = [];
@@ -11,16 +14,33 @@ internal sealed class ReportSqlSelectionPlan
     internal List<(string Name, string Value)> Literals { get; } = [];
     internal HashSet<string> DeclaredNames { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    internal sealed class StringBinding(string name, string guard, string? constantName, string? constantValue, bool allowMultiple)
+    internal sealed class StringBinding(string name, string guard, string? constantName, string? constantValue, bool allowMultiple, string? guarded = null, string? membership = null)
     {
         internal string Name { get; } = name;
         internal string Guard { get; } = guard;
         internal string? ConstantName { get; } = constantName;
         internal string? ConstantValue { get; } = constantValue;
         internal bool AllowMultiple { get; } = allowMultiple;
+        /// <summary>The guarded term as generated, and its form for a list read back from one value (<see cref="ReportSelectionSql.StringMembership"/>).</summary>
+        internal string? Guarded { get; } = guarded;
+        internal string? Membership { get; } = membership;
         internal string[] SqlNames { get; set; } = [name];
         internal bool Expanded { get; set; }
-        internal StringBinding Clone() => new(Name, Guard, ConstantName, ConstantValue, AllowMultiple) { SqlNames = SqlNames.ToArray(), Expanded = Expanded };
+        /// <summary>The members of a list an execution binds as one value; null when each member binds on its own.</summary>
+        internal string[]? Members { get; set; }
+        internal StringBinding Clone() => new(Name, Guard, ConstantName, ConstantValue, AllowMultiple, Guarded, Membership)
+            { SqlNames = SqlNames.ToArray(), Expanded = Expanded, Members = Members };
+    }
+
+    /// <summary>The reserved names <see cref="ValidateAndBind"/> adds.</summary>
+    internal IEnumerable<string> GeneratedNames()
+    {
+        foreach (var binding in Strings)
+        {
+            yield return binding.Guard;
+            if (binding.ConstantName is not null) yield return binding.ConstantName;
+        }
+        foreach (var (name, _) in Literals) yield return name;
     }
 
     internal ReportSqlSelectionPlan Clone()
@@ -55,8 +75,8 @@ internal sealed class ReportSqlSelectionPlan
             }
             var binding = Strings.First(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (matches.Length == 0 || matches[0].Value is string || matches[0].Value is not System.Collections.IEnumerable sequence) continue;
-            var values = sequence.Cast<object?>().Take(1001).ToArray();
-            if (values.Length == 0 || values.Length > 1000 || values.Any(value => value is not string)
+            var values = sequence.Cast<object?>().ToArray();
+            if (values.Length == 0 || values.Any(value => value is not string)
                 || !binding.AllowMultiple && values.Length != 1)
                 throw new InvalidDataException($"Positioned SQL selection '{binding.Name}' requires a nonempty list of strings before binding.");
         }
@@ -77,6 +97,7 @@ internal sealed class ReportSqlSelectionPlan
         // suffix names. Reject cross-selection collisions before the rewriter
         // can overwrite an earlier value, including undeclared host seeds.
         var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sanitizedExtra = new HashSet<string>(extraParameters?.Keys.Select(Sanitized) ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var (name, values) in selections)
         {
             var sanitized = Sanitized(name);
@@ -85,7 +106,6 @@ internal sealed class ReportSqlSelectionPlan
                     && !required.Equals(name, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("Reserved or sanitized positioned SQL selection name.");
             if (!owners.Add(sanitized)) throw new InvalidDataException("Ambiguous positioned SQL selection names.");
-            if (values?.Count > 2100) throw new InvalidDataException("Positioned SQL selection exceeds the parameter limit.");
             if (values?.Count > 1)
                 for (var index = 0; index < values.Count; index++)
                     if (!owners.Add(sanitized + "_" + index))
@@ -103,15 +123,15 @@ internal sealed class ReportSqlSelectionPlan
             if (matches.Length == 0) continue;
             if (matches.Length != 1) throw new InvalidDataException($"Ambiguous positioned SQL selection '{binding.Name}'.");
             var (name, values) = matches[0];
-            if (values is null || values.Count == 0 || values.Count > 1000 || values.Any(value => value is null))
-                throw new InvalidDataException($"Positioned SQL selection '{binding.Name}' requires 1–1000 non-null strings.");
+            if (values is null || values.Count == 0 || values.Any(value => value is null))
+                throw new InvalidDataException($"Positioned SQL selection '{binding.Name}' requires non-null strings.");
             if (!binding.AllowMultiple && values.Count != 1)
                 throw new InvalidDataException($"Positioned SQL parameter '{binding.Name}' does not allow multiple values.");
             var names = values.Count == 1 ? new[] { name } : Enumerable.Range(0, values.Count).Select(index => name + "_" + index).ToArray();
             if (binding.Expanded && !binding.SqlNames.SequenceEqual(names, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidDataException("Reload the positioned report before changing an expanded SQL selection's shape.");
             if (values.Count > 1 && names.Any(candidate => DeclaredNames.Contains(candidate)
-                || !binding.Expanded && extraParameters?.Keys.Any(key => Sanitized(key).Equals(candidate, StringComparison.OrdinalIgnoreCase)) == true))
+                || !binding.Expanded && sanitizedExtra.Contains(candidate)))
                 throw new InvalidDataException($"Expanded positioned SQL selection '{binding.Name}' collides with another parameter.");
             binding.SqlNames = names;
             binding.Expanded = values.Count > 1;
@@ -120,10 +140,14 @@ internal sealed class ReportSqlSelectionPlan
 
     internal void ValidateAndBind(IDictionary<string, object>? parameters)
     {
+        // Each name is looked up once; a key that differs only in case from another makes the name ambiguous.
+        var byName = new Dictionary<string, List<KeyValuePair<string, object>>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in parameters ?? Enumerable.Empty<KeyValuePair<string, object>>())
+            if (byName.TryGetValue(pair.Key, out var same)) { if (same.Count < 2) same.Add(pair); }
+            else byName[pair.Key] = [pair];
         object Value(string name)
         {
-            var matches = parameters?.Where(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray() ?? [];
-            if (matches.Length != 1 || matches[0].Value is null or DBNull)
+            if (!byName.TryGetValue(name, out var matches) || matches.Count != 1 || matches[0].Value is null or DBNull)
                 throw new InvalidDataException($"Positioned SQL parameter '{name}' is missing, null or ambiguous.");
             return matches[0].Value;
         }
@@ -140,7 +164,7 @@ internal sealed class ReportSqlSelectionPlan
         var generated = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         foreach (var binding in Strings)
         {
-            var values = binding.SqlNames.Select(name => Value(name) is string value ? value
+            var values = binding.Members ?? binding.SqlNames.Select(name => Value(name) is string value ? value
                 : throw new InvalidDataException($"Positioned SQL selection '{binding.Name}' requires non-null string bindings; expand lists before execution.")).ToArray();
             // The SQL predicate already retains every non-ASCII/control-character
             // database value. An uncertain selection must not also admit unrelated
@@ -161,7 +185,6 @@ internal sealed class ReportSqlSelectionPlan
             if (aliases.Length == 1) parameters[aliases[0]] = pair.Value;
             else parameters.Add(pair.Key, pair.Value);
         }
-        if (parameters.Count > 2100) throw new InvalidDataException("Positioned report exceeds SQL Server's 2,100 parameter limit.");
     }
 
     private static bool RequiresAsciiFallback(string value)
@@ -188,5 +211,5 @@ internal sealed class ReportSqlSelectionPlan
     }
 
     private static bool LocalDate(object value) => value is DateTime date && date.Kind == DateTimeKind.Unspecified && date.TimeOfDay == TimeSpan.Zero;
-    private static string Sanitized(string name) => new(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
+    internal static string Sanitized(string name) => new(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
 }
