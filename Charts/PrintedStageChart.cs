@@ -7,20 +7,21 @@ namespace Fx.ControlKit.Charts;
 internal static class PrintedStageChart
 {
     internal static ReportVectorImage Draw(ChartType type, IReadOnlyList<ChartSeries> series, string title,
-        double width, double height, bool legend, string[] palette, bool reportGroupChart = false, ChartAxis? xAxis = null)
+        double width, double height, bool legend, string[] palette, bool reportGroupChart = false, ChartAxis? xAxis = null, ReportHorizontalBarText? horizontalText = null)
     {
         if (type == ChartType.Pie && series is { Count: 1 } && series[0].DataPoints is { Count: > 0 } zeroPoints
             && zeroPoints.All(point => point is not null && (point.IsEmpty || point.Value == 0)))
             return DrawZeroPie(series[0], title, width, height, legend);
         if (type is ChartType.Line or ChartType.Area) return DrawLine(type, series, title, width, height, legend, palette, reportGroupChart, xAxis);
         var image = new ReportVectorImage { Width = width, Height = height };
-        void Text(double x, double y, string text, double size, string anchor = "middle", bool italic = false) =>
-            image.Shapes.Add(new("Text", [x,y], "#000000", "none", 0, Text: new(text, "Arial", size, 700, Italic: italic, Anchor: anchor)));
+        void Text(double x, double y, string text, double size, string anchor = "middle", bool italic = false, string color = "#000000") =>
+            image.Shapes.Add(new("Text", [x,y], color, "none", 0, Text: new(text, "Arial", size, 700, Italic: italic, Anchor: anchor)));
         void Box(double x, double y, double w, double h, string fill, string stroke = "none") =>
             image.Shapes.Add(new("Rectangle", [x,y,w,h], fill, stroke, .65));
         var font = Math.Min(width / 40, height / 24);
         Box(0, 0, width, height, "#ffffff");
-        Text(width / 2, font * 1.6, title, font * 1.5);
+        var heading = horizontalText is { TitlePoints: > 0 } ? horizontalText.TitlePoints : font * 1.5;
+        Text(width / 2, horizontalText is null ? font * 1.6 : heading * 1.35, title, heading, color: horizontalText?.Color ?? "#000000");
         if (series.Count == 0 || series[0].DataPoints.Count == 0) return image;
         var points = series[0].DataPoints;
         var plotWidth = width * (legend ? type == ChartType.Gauge ? .78 : .72 : 1);
@@ -190,19 +191,27 @@ internal static class PrintedStageChart
             var low = Math.Min(0, points.Min(p => p.Value));
             var high = Math.Max(0, points.Max(p => p.Value));
             if (high == low) high = low + 1;
-            double X(double value) => width * (.17 + .77 * (value-low)/(high-low));
-            var rowHeight = height * .68 / points.Count;
+            var frame = horizontalText?.Frame is { IsValid: true } authored ? authored : null;
+            var left = width * (frame?.Left ?? .17);
+            var right = width * (frame?.Right ?? .94);
+            double X(double value) => left + (right-left)*(value-low)/(high-low);
+            yStart = frame is null ? yStart : height * frame.Top;
+            var bottom = frame is null ? yStart + height * .68 : height * frame.Bottom;
+            var rowHeight = (bottom-yStart) / points.Count;
+            var tick = horizontalText is { TickPoints: > 0 } ? horizontalText.TickPoints : font*.75;
             for (var i = 0; i <= 8; i++)
             {
                 var value = low + (high-low)*i/8;
                 image.Shapes.Add(new("Polyline", [X(value), yStart, X(value), yStart + rowHeight*points.Count], "none", "#000000", .55));
-                Text(X(value), yStart + rowHeight*points.Count + font, value.ToString("0.##"), font*.75);
+                Text(X(value), bottom + tick*1.3, value.ToString("0.##"), tick);
             }
+            if (horizontalText is { ValueTitle.Length: > 0 })
+                Text((left+right)/2, bottom+(height-bottom)*.73, horizontalText.ValueTitle, horizontalText.CaptionPoints > 0 ? horizontalText.CaptionPoints : font);
             string[] colors = ["#0066ff", "#ff0000", "#ffff00"];
             for (var i = 0; i < points.Count; i++)
             {
                 var p = points[i]; var y = yStart + i*rowHeight;
-                Text(X(low)-2,y+rowHeight*.53,p.Label,font*.8,"end");
+                Text(X(low)-2,y+rowHeight*.5+tick*.32,p.Label,tick,"end");
                 if (!p.IsEmpty) Box(Math.Min(X(0),X(p.Value)),y+rowHeight*.1,Math.Abs(X(p.Value)-X(0)),rowHeight*.8,p.Color ?? colors[i%colors.Length],"#000000");
             }
             return image;

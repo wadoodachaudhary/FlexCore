@@ -90,7 +90,10 @@ internal static class PrintedCategoryBarChart
         else
         {
             range = BarPrintScale.Range(Math.Min(0, minimum), Math.Max(0, maximum), targetIntervals: 8);
-            if (range.Maximum == maximum)
+            // A native single-series category-key bar ends at the first tick at or above
+            // the tallest bar, including an exact hit. Other plot styles retain their headroom.
+            var categoryScale = type == ChartType.Bar && groups.Length == 1 && rightKey is { KeyBySeries: false };
+            if (!categoryScale && range.Maximum == maximum)
                 range = (range.Minimum, range.Maximum + (range.Maximum - range.Minimum) / (range.Ticks - 1), range.Ticks + 1);
         }
         var low = yAxis?.Min ?? range.Minimum; var high = yAxis?.Max ?? range.Maximum;

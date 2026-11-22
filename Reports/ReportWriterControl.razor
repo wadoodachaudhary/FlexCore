@@ -71,7 +71,7 @@
                 <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnFirstPage" Title="First page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏮</span></ToolbarButtonControl>
                 <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnPreviousPage" Title="Previous page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">◀</span></ToolbarButtonControl>
                 <NumericTextBoxControl TValue="int" Value="CurrentPage" ValueChanged="OnPageChanged" Min="1" Max="@(IsPageCountFinal ? Math.Max(1, PageCount) : 10000)" Width="65px" />
-                <span>of @(IsPageCountFinal ? PageCount.ToString() : PageCount + "+")</span>
+                <span>of @(IsPageCountFinal ? PageCount.ToString() : ActiveTab?.EstimatedPageCount is { } about ? "about " + about.ToString("N0") : PageCount + "+")</span>
                 <ToolbarButtonControl Disabled="@(IsLoading || IsPageCountFinal && CurrentPage >= PageCount)" OnClick="OnNextPage" Title="Next page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▶</span></ToolbarButtonControl>
                 <ToolbarButtonControl Disabled="@(IsLoading || IsPageCountFinal && CurrentPage >= PageCount)" OnClick="OnLastPage" Title="Last page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏭</span></ToolbarButtonControl>
             </div>
@@ -256,6 +256,10 @@ else
     /// <see cref="ReportDataSetExecutor"/>). Null uses the registered executor.</summary>
     [Parameter] public IReportDataExecutor? DataExecutor { get; set; }
     private IReportDataExecutor db => DataExecutor ?? InjectedDataExecutor;
+
+    /// <summary>Supplies this viewer's report context instead of the injected session,
+    /// including refresh, parameter lookup and drill-down. Null retains the host session.</summary>
+    [Parameter] public IReportSessionContext? SessionContext { get; set; }
 
     /// <summary>Offer a toolbar choice between navigating to a group and opening its drill-down tab.
     /// Off by default: tree clicks navigate to groups; drilling from report objects is unchanged.</summary>
@@ -1421,16 +1425,16 @@ else
                     var childRows = ExecuteReportData(child, childParameters);
                     GuardRowLimit(childRows);
                     return childRows;
-                }, tolerateSubreportQueryError: Options.TolerateSubreportQueryError);
+                }, tolerateSubreportQueryError: Options.TolerateSubreportQueryError, loadSubreportsOnDemand: true);
                 Logger.LogInformation("Native report prepared: {Title} ({Rows} source rows, {SubreportQueries} subreport queries, {ElapsedMs} ms)",
                     definition.Title, dt.Rows.Count, childQueries, started.ElapsedMilliseconds);
-                var result = await PaginateNativeSession(session, 1, token);
+                var (result, estimator, estimatedPages) = await PaginateFirstPagesAsync(session, token);
                 token.ThrowIfCancellationRequested();
                 Logger.LogInformation("Native report paginated: {Title} ({Pages} pages, {Diagnostics} diagnostics, {ElapsedMs} ms total)",
                     definition.Title, result.Snapshots.Count, result.Diagnostics.Count, started.ElapsedMilliseconds);
                 Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, PageSnapshots = result.Snapshots, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
                     CreateDataExport = session.CreateDataExport, NativeSession = session, Tree = result.Tree,
-                    IsPaginationComplete = result.IsComplete,
+                    IsPaginationComplete = result.IsComplete, PageEstimator = estimator, EstimatedPageCount = estimatedPages,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
                 _lastParameters = CopyParameterValues(sqlParams);
                 _lastFormulaParameters = formulaParams;
@@ -1596,6 +1600,9 @@ else
     /// Load and render a report by path (.rpt or .xml). Prompts the
     /// user for any required parameters not supplied via
     /// <paramref name="seedParameters"/> or the current session. The toolbar reopens the authored inputs.
+    /// A "Value:&lt;name&gt;" seed supplies an explicit value, including an empty string;
+    /// ordinary empty seeds retain their meaning of an unanswered parameter.
+    /// A "Number:&lt;name&gt;" seed supplies an invariant number as a typed value, so the query compares it as a number.
     /// </summary>
     public Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
         => RunReportAsync(file, seedParameters, PromptAction.Open);
@@ -1628,6 +1635,20 @@ else
 
             if (seedParameters != null)
                 foreach (var kv in seedParameters)
+                {
+                    if (kv.Key.StartsWith("Value:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var name = kv.Key["Value:".Length..];
+                        if (!string.IsNullOrWhiteSpace(name) && kv.Value is not null)
+                            _seedParameters[name] = kv.Value;
+                        continue;
+                    }
+                    if (kv.Key.StartsWith("Number:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (kv.Key.Length > "Number:".Length && TryParseNumberSeed(kv.Value, out _))
+                            _seedParameters[kv.Key] = kv.Value;
+                        continue;
+                    }
                     if (!string.IsNullOrEmpty(kv.Value))
                     {
                         if (kv.Key.StartsWith("Default:", StringComparison.OrdinalIgnoreCase))
@@ -1645,6 +1666,7 @@ else
                         }
                         _seedParameters[kv.Key] = kv.Value;
                     }
+                }
             if (!file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase)
                 && !file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
             {
@@ -1665,8 +1687,12 @@ else
                 var promptDefinition = definition.Parameters.ToArray();
                 _parameterDefinition = promptDefinition;
                 var typedParams = _seedParameters
-                    .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase))
+                    .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase)
+                        && !p.Key.StartsWith("Number:", StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(p => p.Key, p => (object)p.Value, StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in _seedParameters)
+                    if (kv.Key.StartsWith("Number:", StringComparison.OrdinalIgnoreCase) && TryParseNumberSeed(kv.Value, out var number))
+                        typedParams[kv.Key["Number:".Length..]] = number;
                 // "Multi:<name>" seeds — the host's answer to VB6's repeated
                 // c.ParameterValue calls (ONE multi-value parameter, many
                 // values). The value is a \u0002-separated list; it enters
@@ -1808,6 +1834,10 @@ else
             await InvokeAsync(StateHasChanged);
         }
     }
+
+    private static bool TryParseNumberSeed(string? text, out decimal value)
+        => decimal.TryParse(text, System.Globalization.NumberStyles.AllowLeadingSign | System.Globalization.NumberStyles.AllowDecimalPoint,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
 
     private readonly ReportConversionWorkspace _conversionWorkspace = new();
 
@@ -2160,10 +2190,10 @@ else
 
     private async Task OnGroupNodeClicked(FxGroupNode node)
     {
-        if (!IsPageCountFinal && node.PageIndex <= 0)
+        if (!IsPageCountFinal && (node.PageIndex <= 0 || node.PageIndex > PageCount))
         {
             var anchor = node.AnchorId;
-            if (!await EnsureNativePagesAsync(0)) return;
+            if (!await EnsureNativePagesAsync(Math.Max(0, node.PageIndex))) return;
             node = FlattenGroups(GroupTree).FirstOrDefault(group => group.AnchorId == anchor) ?? node;
         }
         if (EffectiveTreeMode == TreeNavigationMode.DrillDown && ActiveTab?.NativeSession is not null)
@@ -3636,7 +3666,7 @@ else
     /// <see cref="IReportSessionContext"/>. Lets the host wire any number of parameter
     /// names (UserId, TenantId, …) without changing this control.
     /// </summary>
-    private object? ResolveSessionParameter(string name) => SessionState.Get(name);
+    private object? ResolveSessionParameter(string name) => (SessionContext ?? SessionState).Get(name);
 
     /// <summary>
     /// Throws if the SQL result exceeds <see cref="ReportOptions.MaxRowsPerReport"/>. Protects
@@ -3651,7 +3681,7 @@ else
         var execution = definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db));
         if (execution.Sql != definition.Sql)
             LogQuery("Prepared report execution", execution.Sql, parameters ?? new Dictionary<string, object>());
-        return db is IReportDefinitionDataExecutor structured ? structured.Execute(execution, parameters) : db.Execute(execution.Sql, parameters);
+        return db is IReportDefinitionDataExecutor structured ? structured.Execute(execution, parameters) : db.Execute(execution.Sql, ReportSqlParameters.For(execution.Sql, parameters));
     }
 
     // The hierarchy query binds what the main query binds, fitted to the server as that request is.
@@ -3659,7 +3689,8 @@ else
     {
         if (sqlParams.Count == 0) return db.Execute(definition.TreeSql, null);
         var parameters = new Dictionary<string, object>(sqlParams, StringComparer.OrdinalIgnoreCase);
-        return db.Execute(definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db)).TreeSql, parameters);
+        var treeSql = definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db)).TreeSql;
+        return db.Execute(treeSql, ReportSqlParameters.For(treeSql, parameters));
     }
 
     private void GuardRowLimit(System.Data.DataTable dt)

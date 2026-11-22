@@ -21,7 +21,11 @@ public static class CrystalReportXmlVersion
     // Version 55 honors the report's ToDate option on database date-time field formats.
     // Version 56 retains the viewer, wall thickness, pan and riser spacing for spatial columns.
     // Version 57 retains the projection, solid walls and axis captions for 3D surfaces.
-    public const int Current = 57;
+    // Version 58 preserves spaced measure rows in a column-only cross-tab.
+    // Version 59 carries paragraph margins, first-line indents, alignment and native box corner ellipses.
+    // Version 60 retains date objects from legacy records without the optional weekday trailer.
+    // Version 61 carries boolean field styles, time-field clocks and horizontal chart typography.
+    public const int Current = 61;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -609,6 +613,7 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    internal bool BooleanYesNo { get; set; }
     internal int? GraphDrawingId { get; set; }
     internal bool HiddenGaugeLegend { get; set; }
     internal int? PerspectivePieDrawingId { get; set; }
@@ -683,6 +688,7 @@ public sealed class CrystalReportObjectModel
 
 public sealed class CrystalObjectFormatModel
 {
+    public bool BooleanYesNo { get; set; }
     internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string CssClass { get; set; } = "";
@@ -717,6 +723,8 @@ public sealed class CrystalBorderModel
 
     /// <summary>Saved stroke width in twips; zero denotes a device hairline, null means absent metadata.</summary>
     public int? LineWidth { get; set; }
+    public int CornerEllipseWidth { get; set; }
+    public int CornerEllipseHeight { get; set; }
 
     public CrystalColorModel BackgroundColor { get; set; } = CrystalColorModel.TransparentWhite();
 
@@ -725,6 +733,7 @@ public sealed class CrystalBorderModel
 
 public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color)
 {
+    public ReportParagraphFormat? Paragraph { get; set; }
     public int CharacterSpacingTwips { get; init; }
     internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
     public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);

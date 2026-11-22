@@ -65,8 +65,36 @@ internal static class CrystalDeviceText
         return new ReportTextMetrics(Bottom(visible) + (int)Math.Round(borders, MidpointRounding.AwayFromZero), bounds) { Native = true };
     }
 
+    // One block per authored paragraph in both screen and print. Break at the printer's design em,
+    // not the sometimes smaller PDF paint em. Only the first line gets the signed first-line offset.
+    internal static string Paragraph(ReportDesignerElement element, string html, ReportParagraphFormat format, int leadingTabs, double? pitch)
+    {
+        var left = Math.Max(0, format.Left);
+        var right = Math.Max(0, format.Right);
+        var first = Math.Max(-left, format.First);
+        // Crystal's default leading tab stop is a quarter inch from the paragraph origin.
+        if (leadingTabs > 0) first = (int)((Math.Floor(first / 360d) + leadingTabs) * 360);
+        var dpi = ReportObjectRenderer.TextDpi(element);
+        var width = element.WidthTwips - element.IndentTwips - left - right
+            - 15 * (ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips)
+                  + ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips));
+        long Pixels(double twips) => (long)Math.Round(Math.Max(0, twips) * dpi / 1440, MidpointRounding.AwayFromZero);
+        if (element.UseCrystalScreenMetrics && Enabled && format.CssAlignment(element.HorizontalAlignment) != "justify")
+        {
+            try
+            {
+                if (Runs(element, html) is { Count: > 0 } runs && Break(runs, Pixels(width), Pixels(width - first)) is { } lines)
+                    html = ExplicitLines(html, lines.Select(l => new ReportTextLine(0, 0, l.Start, l.End)).ToArray(), paragraph: true);
+            }
+            catch (Exception error) when (error is NotSupportedException or InvalidDataException or System.Xml.XmlException or FileNotFoundException) { /* ordinary wrapped block */ }
+        }
+        var lineHeight = pitch is { } px ? $"line-height:{ReportObjectRenderer.Number(px)}px;" : "";
+        string Pt(int twips) => ReportObjectRenderer.Number(twips / 20d) + "pt";
+        return $"<div data-fx-paragraph=\"true\" style=\"padding-left:{Pt(left)};padding-right:{Pt(right)};text-indent:{Pt(first)};text-align:{format.CssAlignment(element.HorizontalAlignment)};tab-size:18pt;{lineHeight}min-height:1lh\">{html}</div>";
+    }
+
     /// <summary>The measured HTML, re-emitted as one block per native line so neither the viewer nor the PDF re-wraps it.</summary>
-    internal static string ExplicitLines(string html, IReadOnlyList<ReportTextLine> lines)
+    internal static string ExplicitLines(string html, IReadOnlyList<ReportTextLine> lines, bool paragraph = false)
     {
         if (lines.Count == 0 || lines.Any(l => l.Start < 0)) return html;
         List<Piece>? pieces;
@@ -78,7 +106,9 @@ internal static class CrystalDeviceText
         var output = new StringBuilder();
         foreach (var line in lines)
         {
-            output.Append("<span data-fx-native-line=\"true\" style=\"display:block;white-space:pre\">");
+            output.Append("<span data-fx-native-line=\"true\" style=\"display:block;white-space:pre");
+            if (paragraph && line.Start > 0) output.Append(";text-indent:0");
+            output.Append("\">");
             foreach (var piece in pieces)
             {
                 var start = Math.Max(line.Start, piece.Start);
@@ -312,6 +342,16 @@ internal static class CrystalDeviceText
     // browser's fractional advances. Preserve its box and the gap to the next
     // field; only compress preview ink that fits in screen metrics. A narrowed
     // subreport frame retains its existing partial-last-glyph allowance.
+    internal static string FitRightOverhang(ReportDesignerElement element, string html, string plain)
+    {
+        // Preview uses the designer em, which can be larger than the export em. Preserve
+        // its height, anchor the ink on the right and keep it inside the recovered frame.
+        var css = CssLineWidth(element, html, [new ReportTextLine(0, 0, 0, plain.Length)]);
+        var available = (element.WidthTwips - element.IndentTwips) / 15d;
+        if (css is null || css <= available || available <= 1) return html;
+        return $"<span style=\"position:absolute;right:0;width:max-content;transform-origin:right;transform:scaleX({ReportObjectRenderer.Number((available - .25) / css.Value)})\">{html}</span>";
+    }
+
     internal static string PreviewSingleLine(ReportDesignerElement element, string html, bool narrowedByFrame)
     {
         if (!Enabled || !element.UseCrystalScreenMetrics || element.Kind != "Field" || element.CanGrow
@@ -408,7 +448,7 @@ internal static class CrystalDeviceText
     private readonly record struct Line(int Start, int End);
 
     /// <summary>GDI DT_WORDBREAK: lines break at spaces and line feeds only; a word wider than the box stays whole and clips.</summary>
-    private static List<Line>? Break(List<(string Text, CrystalDeviceFont Font, int Ppem)> runs, long limit)
+    private static List<Line>? Break(List<(string Text, CrystalDeviceFont Font, int Ppem)> runs, long limit, long? firstLimit = null)
     {
         var text = string.Concat(runs.Select(r => r.Text)).Replace("\r\n", "\n").Replace('\r', '\n');
         if (text.Length != runs.Sum(r => r.Text.Length)) return null; // CR handling changed offsets; let the browser measure
@@ -452,10 +492,11 @@ internal static class CrystalDeviceText
             while (index2 < text.Length && text[index2] is not (' ' or '\t' or '\n')) index2++;
             var word = 0L;
             for (var w = wordStart; w < index2; w++) word += advances[w] + (w > wordStart ? kerns[w] : 0);
-            if (word > limit) return null;
+            var currentLimit = lines.Count == 0 ? firstLimit ?? limit : limit;
+            if (word > Math.Max(limit, currentLimit)) return null;
             // The pairs that join the spaces and the word to what the line already holds apply only when they stay on it.
             var join = (used > 0 ? kerns[spaceStart] : 0) + (spaceStart < wordStart ? kerns[wordStart] : 0);
-            if (used > 0 && used + join + spaces + word > limit)
+            if (used > 0 && used + join + spaces + word > currentLimit)
             {
                 lines.Add(new(lineStart, wordStart)); lineStart = wordStart; used = word;
             }

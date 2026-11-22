@@ -2233,7 +2233,7 @@ internal static partial class CrystalReportContentsParser
         var border = reader.LoadAnyRecord();
         if (border.Type == 237)
         {
-            reportObject.Border = ReadObjectBorder(reader);
+            reportObject.Border = ReadObjectBorder(reader, reportObject.Kind == "Box");
         }
         else
         {
@@ -2288,7 +2288,7 @@ internal static partial class CrystalReportContentsParser
         return format;
     }
 
-    private static CrystalBorderModel ReadObjectBorder(TslvArchiveReader reader)
+    private static CrystalBorderModel ReadObjectBorder(TslvArchiveReader reader, bool box = false)
     {
         var border = new CrystalBorderModel();
         try
@@ -2316,6 +2316,14 @@ internal static partial class CrystalReportContentsParser
                 border.BackgroundColor = ReadCrystalColor(reader, nullColor: CrystalColorModel.TransparentWhite());
             }
             if (reader.BytesLeftInRecord >= 4) border.LineWidth = reader.LoadInt32();
+            // The extended box-pen record stores two ellipse diameters in twips. Don't
+            // interpret other border record layouts (or a field's border) as a box shape.
+            if (box && reader.BytesLeftInRecord == 12)
+            {
+                _ = reader.LoadInt32();
+                var cx = reader.LoadInt16(); var cy = reader.LoadInt16();
+                if (cx > 0 && cy > 0) { border.CornerEllipseWidth = cx; border.CornerEllipseHeight = cy; }
+            }
             reader.SkipRestOfRecord();
             ReadConditionReferences(reader, border.ConditionReferences, ["LeftLineStyle", "RightLineStyle", "TopLineStyle", "BottomLineStyle",
                 "EnableTightHorizontal", "", "HasDropShadow", "BorderColor", "BackgroundColor", "LineWidth", "FillStyle"]);
@@ -2344,6 +2352,7 @@ internal static partial class CrystalReportContentsParser
         CrystalReportObjectModel reportObject)
     {
         var firstRun = reportObject.TextRuns.Count;
+        var paragraphs = new List<(int Start, ReportParagraphFormat Format)>();
         var text = new System.Text.StringBuilder();
         for (var i = 0; i < paragraphCount; i++)
         {
@@ -2353,9 +2362,17 @@ internal static partial class CrystalReportContentsParser
                 CaptureTextRun(reportObject, "\n", "");
             }
 
-            text.Append(ReadTextParagraph(reader, fieldReferences, dataDefinition, reportObject));
+            var start = reportObject.TextRuns.Count;
+            text.Append(ReadTextParagraph(reader, fieldReferences, dataDefinition, reportObject, out var format));
+            if (start == reportObject.TextRuns.Count) CaptureTextRun(reportObject, "", "");
+            paragraphs.Add((start, format));
         }
 
+        // Keep plain objects on the existing inline path. For a formatted object, mark the
+        // first content run of every paragraph, including empty paragraphs.
+        if (paragraphs.Any(p => p.Format.Left != 0 || p.Format.Right != 0 || p.Format.First != 0)
+            || paragraphs.Select(p => p.Format.Alignment).Distinct().Skip(1).Any())
+            foreach (var (start, format) in paragraphs) reportObject.TextRuns[start].Paragraph = format;
         NormalizeTextRunLineEndings(reportObject.TextRuns, firstRun);
         return text.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace('\u00a0', ' ');
     }
@@ -2386,13 +2403,14 @@ internal static partial class CrystalReportContentsParser
         TslvArchiveReader reader,
         FieldReferenceTable fieldReferences,
         CrystalDataDefinitionModel dataDefinition,
-        CrystalReportObjectModel reportObject)
+        CrystalReportObjectModel reportObject, out ReportParagraphFormat format)
     {
         _ = reader.LoadNextRecord(192, 1792, 193);
-        _ = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
-        _ = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
-        _ = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
+        var left = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
+        var right = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
+        var first = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : 0;
         var alignment = reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0;
+        format = new(left, right, first, HorizontalAlignmentName(alignment));
         if (alignment != 0)
         {
             reportObject.Format.HorizontalAlignment = HorizontalAlignmentName(alignment);

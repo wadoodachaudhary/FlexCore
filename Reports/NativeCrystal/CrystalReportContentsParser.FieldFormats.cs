@@ -10,6 +10,7 @@ internal static partial class CrystalReportContentsParser
         var systemDefault = false;
         var suppressDuplicates = false;
         var dateDefault = -1;
+        var booleanStyle = -1;
         ReportNativeDateComponents? dateComponents = null;
         ReportNativeTimeComponents? timeComponents = null;
         var order = -1;
@@ -41,12 +42,15 @@ internal static partial class CrystalReportContentsParser
             }
             else if (record.Type == 249)
                 reportObject.NativeNumericCandidates.Add(ReadNumericFormat(reader, record.Offset));
-            else if (record.Type is 241 or 243 or 245 or 247)
+            else if (record.Type is 239 or 241 or 243 or 245 or 247)
             {
                 var propertyConditional = false;
                 _ = reader.LoadNextRecord(record.Type - 1, 1792, 160);
                 switch (record.Type)
                 {
+                    case 239:
+                        booleanStyle = reader.LoadEnum();
+                        break;
                     case 241:
                         suppressDuplicates = reader.LoadBoolean();
                         systemDefault = reader.LoadBoolean();
@@ -70,7 +74,9 @@ internal static partial class CrystalReportContentsParser
                         var dayOfWeekSeparator = reader.LoadString() ?? "";
                         dateComponents = new(dateOrder, yearType, monthType, dayType, dayOfWeekType, eraType, calendarType,
                             zeroSeparator, firstSeparator, secondSeparator, thirdSeparator, dayOfWeekSeparator,
-                            reader.LoadEnum(), reader.LoadEnum());
+                            // Older date records end before the optional weekday position and enclosure.
+                            reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0,
+                            reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
                         break;
                     case 245:
                         order = reader.LoadEnum();
@@ -104,13 +110,18 @@ internal static partial class CrystalReportContentsParser
                     var index = reader.LoadUInt16();
                     propertyConditional |= !string.IsNullOrEmpty(name) || index != ushort.MaxValue;
                 }
-                conditional |= propertyConditional;
+                if (record.Type == 239)
+                {
+                    if (propertyConditional) booleanStyle = -1;
+                }
+                else conditional |= propertyConditional;
                 if (record.Type == 241) commonConditional |= propertyConditional;
             }
             reader.SkipRestOfRecord();
             if (record.Type == 235) end = reader.Position;
             if (record.Type == endType) break;
         }
+        reportObject.BooleanYesNo = booleanStyle == 2 && !commonConditional;
         reportObject.SuppressIfDuplicate = suppressDuplicates;
         for (var i = 0; i < reportObject.NativeNumericCandidates.Count; i++)
             reportObject.NativeNumericCandidates[i] = reportObject.NativeNumericCandidates[i] with
@@ -140,6 +151,7 @@ internal static partial class CrystalReportContentsParser
         foreach (var obj in definition.ReportDefinition.Areas.SelectMany(a => a.Sections).SelectMany(s => s.ReportObjects))
         {
             var resolved = ResolveFieldType(obj.DataSource, database, definition, out var type);
+            obj.Format.BooleanYesNo = obj.BooleanYesNo && resolved && type == 8;
             obj.NativeNumberFormat = resolved && type is >= 0 and <= 7
                 ? type == 7 ? obj.NativeCurrencyFormat : obj.NativeNumberFormat : null;
             obj.NativeCurrencyFormat = null;
@@ -175,7 +187,7 @@ internal static partial class CrystalReportContentsParser
         // PrintDate/PrintTime use only their component; other fields retain their resolved type.
         if (dataSource.Equals("PrintDate", StringComparison.OrdinalIgnoreCase)) return format with { Order = 2 };
         if (dataSource.Equals("PrintTime", StringComparison.OrdinalIgnoreCase)) return format with { Order = 3 };
-        if (resolved != true || type is not (9 or 15)) return null;
+        if (resolved != true || type is not (9 or 10 or 15)) return null;
         // A report may display database timestamps as dates without changing their database type
         // or the declared type of a formula/parameter. Embedded field runs use this same resolver.
         var databaseDate = type == 15 && definition.ConvertDatabaseDateTimeToDate && database.Tables

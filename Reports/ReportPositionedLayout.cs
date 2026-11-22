@@ -163,6 +163,7 @@ public sealed partial class ReportLayoutSession
         public int Bottom { get; set; }
         /// <summary>The room the page kept for its page footers when it was opened.</summary>
         public int FooterReserve { get; init; }
+        public bool FooterResetsNumber { get; init; }
         public bool HasBody { get; set; }
         public bool HasHeaders { get; set; }
         public bool EndsWithReportHeaderBreak { get; set; }
@@ -178,9 +179,10 @@ public sealed partial class ReportLayoutSession
     /// ends the run. Cancellation is never accepted.</summary>
     public ReportLayoutSession(ReportPositionedLayout layout, DataTable data, IReadOnlyDictionary<string, object>? parameters = null,
         Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport = null, DateTime? printTime = null,
-        Func<Exception, bool>? tolerateSubreportQueryError = null)
+        Func<Exception, bool>? tolerateSubreportQueryError = null, bool loadSubreportsOnDemand = false)
         : this(layout, CaptureNavigationData(data), parameters, executeSubreport,
-            new RuntimeState { PrintTime = ApplyPrintDate(layout, printTime ?? DateTime.Now), TolerateSubreportQueryError = tolerateSubreportQueryError }, 0) { }
+            new RuntimeState { PrintTime = ApplyPrintDate(layout, printTime ?? DateTime.Now), TolerateSubreportQueryError = tolerateSubreportQueryError }, 0,
+            loadSubreportsOnDemand: loadSubreportsOnDemand) { }
 
     private static DateTime ApplyPrintDate(ReportPositionedLayout layout, DateTime clock) => layout.FixedPrintDate is { } date
         ? new DateTime(date.Year, date.Month, date.Day, 0, 0, 0, clock.Kind).AddTicks(clock.TimeOfDay.Ticks) : clock;
@@ -189,7 +191,7 @@ public sealed partial class ReportLayoutSession
         Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport, RuntimeState state, int depth, ReportLayoutSession? parent = null,
         IReadOnlyList<(string Field, object? Value)>? linkSelections = null, int drillDownGroupLevel = 0,
         string? navigationRoot = null, int[]? navigationRows = null, (DataRow[] Rows, int[] Indexes)? summaryRows = null,
-        DrillReadPass? readPass = null, bool initializePrintContext = false)
+        DrillReadPass? readPass = null, bool initializePrintContext = false, bool loadSubreportsOnDemand = false)
     {
         _layout = layout;
         CaptureCurrencySchema(data);
@@ -248,6 +250,7 @@ public sealed partial class ReportLayoutSession
         }
         else PrepareRows();
         PreparePhysicalPageSchedule();
+        _subreportsOnDemand = loadSubreportsOnDemand && CanLoadSubreportsOnDemand();
         if (_physicalPageSchedule) { _formulaPage = 1; _formulaPages = 1; }
         _initializingPrintContext = _replayingPrint = initializePrintContext;
         try { BuildBands(); }
@@ -518,6 +521,13 @@ public sealed partial class ReportLayoutSession
             }
             else value = Value(reference, row);
             capture?.Invoke(value);
+            if (value is bool boolean && format == "Yes/No") return boolean ? "Yes" : "No";
+            if (string.IsNullOrEmpty(format) && value is TimeSpan clock && nativeDateTime is { } clockFormat
+                && clock >= TimeSpan.Zero && clock < TimeSpan.FromDays(1) && (clockFormat with { Order = 3 }) is { UnsupportedReason: null } timeOnly)
+                return timeOnly.Format(DateTime.MinValue.Add(clock), CultureInfo.CurrentCulture);
+            // A range parameter is not a scalar field. Crystal leaves its direct field blank;
+            // authored formulas can still read and display either endpoint.
+            if (value is CrystalRange && reference.StartsWith("{?", StringComparison.Ordinal)) return "";
             // A saved format this renderer cannot honour is reported once per object (see the constructor);
             // the value still prints, with the default format, rather than as a formula error.
             if (string.IsNullOrEmpty(format) && nativeNumeric is null && nativeNumber is { UnsupportedReason: null } && value is not (null or DBNull or string))
@@ -1142,8 +1152,8 @@ public sealed partial class ReportLayoutSession
                 _diagnostics.Add($"{element.Name}: embedded image bytes are missing. Replace the picture in the designer.");
             var onDemand = element.Kind == "Subreport" && _layout.OnDemandSubreports.ContainsKey(element.Id);
             // A page header or footer builds such a subreport, or one linked to the page, when a page lays it out (PrepareFurnitureSubreports).
-            var deferChild = element.Kind == "Subreport" && !onDemand && _physicalPageSchedule
-                && (HasScheduledSection(section.Id) || section.Kind is "PageHeader" or "PageFooter" && PageLinked(element));
+            var deferChild = element.Kind == "Subreport" && !onDemand && (_subreportsOnDemand || _physicalPageSchedule
+                && (HasScheduledSection(section.Id) || section.Kind is "PageHeader" or "PageFooter" && PageLinked(element)));
             if (deferChild) _deferredSubreports.TryAdd((element.Id, row), null);
             ReportLayoutSession? child = null;
             var childOffset = Measurements.Count;
@@ -1367,7 +1377,8 @@ public sealed partial class ReportLayoutSession
 
     public ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights = null)
     {
-        var next = new PaginationRetry(1, 0, null, null, null, 0);
+        // The first pass of a report laid out in part prints the host's estimate where a page header prints the count.
+        var next = new PaginationRetry(_paginationPageLimit > 0 && EstimatedCountPrints ? PageCountEstimate!.Value : 1, 0, null, null, null, 0);
         while (true)
         {
             var result = PaginatePass(measuredHeights, next.Pages, next.Attempt, next.Counts,
@@ -1381,6 +1392,7 @@ public sealed partial class ReportLayoutSession
         Dictionary<Band, (int Page, int Count)>? inlineContexts, IReadOnlyList<int>? footerRows, int scheduleAttempt, out PaginationRetry? retry)
     {
         retry = null;
+        _pageStartBands.Clear();
         _paginationPasses++;
         if (_textMetrics is null && Measurements.Count > 0 && _state.HasGrowingText && (measuredHeights is null || measuredHeights.Count != Measurements.Count))
             _diagnostics.Add("Browser text measurement is unavailable; CanGrow pagination uses an approximate font metric.");
@@ -1805,6 +1817,10 @@ public sealed partial class ReportLayoutSession
             for (var index = start; index < end; index++) counts[index] = end - start;
             start = end;
         }
+        // Only the first pages are laid out: the count they print is the host's estimate of the whole report, never
+        // fewer than the pages known to exist (those laid out and the one that was being opened).
+        if (prefixOnly && EstimatedCountPrints)
+            for (var index = 0; index < counts.Length; index++) counts[index] = Math.Max(PageCountEstimate!.Value, pages.Count + 1);
         var nextInlineContexts = new Dictionary<Band, (int Page, int Count)>();
         var lastOffsets = LastFragmentOffsets(pages);
         for (var index = 0; index < pages.Count; index++)
@@ -1831,7 +1847,7 @@ public sealed partial class ReportLayoutSession
             if (current.EndsWithReportHeaderBreak || (!current.HasHeaders && index < pages.Count - 1
                 && current.Placements.Any(p => !p.Band.Suppressed && p.Band.Section.Kind == "ReportHeader")
                 && current.Placements.Where(p => !p.Band.Suppressed).All(p => p.Band.Section.Kind == "ReportHeader"
-                    && p.Offset == 0 && p.Height >= Height(p.Band)))) continue;
+                    && (p.Offset == 0 && p.Height >= Height(p.Band) || p.Band.Items.Any(i => i.Table?.NativeCrossTab != null))))) continue;
             var footerTop = current.Bottom;
             for (var f = 0; f < footers.Count; f++)
             {
@@ -1870,6 +1886,10 @@ public sealed partial class ReportLayoutSession
             if (last) _diagnostics.Add($"Mutable page formula layout did not stabilize within {scheduleAttempt + 1} replays; the last computed layout is retained.");
             else { retry = new(pages.Count, 0, counts, nextInlineContexts, nextFooterRows, scheduleAttempt + 1); return new([], []); }
         }
+        // The page past those asked for only let the last of them finish as it does in the whole report.
+        // The page past those asked for only settles them; a group whose own header opens it still navigates there.
+        Page? lookahead = null;
+        if (prefixOnly && _subreportsOnDemand && pages.Count > 1) { lookahead = pages[^1]; pages.RemoveAt(pages.Count - 1); }
         if (_textMetrics is not null)
         {
             // While measurements are still being gathered, the pages built below are thrown away by the measurement loop:
@@ -1993,7 +2013,7 @@ public sealed partial class ReportLayoutSession
                 if (borderTails.TryGetValue(placement, out var tail)) yield return tail;
             }
         }
-        var navigation = BuildNativeNavigation(pages);
+        var navigation = BuildNativeNavigation(lookahead is null ? pages : [.. pages, lookahead]);
         // The measurements this loop asks for are also requested by DiscoverPaintMeasurements below; keep the two in step.
         var output = new List<string>();
         var snapshots = new List<ReportPageSnapshot>();
@@ -2141,9 +2161,6 @@ public sealed partial class ReportLayoutSession
                         }
                     }
                     var content = nullNativeField ? "" : ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader);
-                    var numericContent = content;
-                    content = MaskNumericOverflow(item with { Element = element, Html = content });
-                    numericContent = numericContent != content ? numericContent : null;
                     // Repainting a duplicate field's right-hand fragment must not advance its logical row.
                     var suppressedDuplicate = false;
                     if (paneIndex == 0 || !duplicateDecisions.TryGetValue((placement, item), out suppressedDuplicate))
@@ -2152,11 +2169,10 @@ public sealed partial class ReportLayoutSession
                         if (item.HorizontalPane == 0 && right > size.ContentWidthTwips && SuppressesDuplicates(item.Element))
                             duplicateDecisions[(placement, item)] = suppressedDuplicate;
                     }
-                    if (suppressedDuplicate)
-                    {
-                        content = "";
-                        numericContent = null;
-                    }
+                    content = suppressedDuplicate ? "" : duplicates.PageCurrency(item, this, snapshots.Count + 1, content);
+                    var numericContent = content;
+                    content = MaskNumericOverflow(item with { Element = element, Html = content });
+                    numericContent = numericContent != content ? numericContent : null;
                     var textFrame = element.TextLayoutFrame();
                     var textMetric = element.UseCrystalScreenMetrics && content.Length > 0
                         ? element.CanGrow && !element.HasRotatedText ? TextMetrics(item with { Html = content }) : CrystalDeviceText.Measure(textFrame, content) : null;
@@ -2170,11 +2186,60 @@ public sealed partial class ReportLayoutSession
                         content = CrystalDeviceText.ExplicitLines(content, textLines);
                     }
                     else if (textMetric is null && element.UseCrystalScreenMetrics && !element.HasRotatedText && content.Length > 0) CrystalDeviceText.WidenSingleLine(element, content);
+                    // A native clock rebound to a timestamp can extend a few glyphs beyond the authored time box.
+                    // Keep the full value when the next field leaves room; never cover its neighbour or cross a column.
+                    if (element.Kind == "Field" && element.UseCrystalScreenMetrics && !element.CanGrow && !element.HasRotatedText
+                        && element.NativeDateTimeFormat is { Order: 0 or 1, UnsupportedReason: null } && !translate
+                        && element.HorizontalAlignment is "Default" or "Left" && !content.Contains('<')
+                        && element.Visual is { LeftLine: "NoLine", RightLine: "NoLine", TopLine: "NoLine", BottomLine: "NoLine" }
+                        && element.BackgroundColor is "" or "transparent"
+                        && ReportPdfExport.LegacyTextWidth(element, System.Net.WebUtility.HtmlDecode(content)) is {} dateWidth)
+                    {
+                        var width = (int)Math.Ceiling(dateWidth * 20) + element.IndentTwips + 1;
+                        var end = element.LeftTwips + width;
+                        if (width > element.WidthTwips && width - element.WidthTwips <= (double)element.FontSize * 40
+                            && end <= (placement.Width > 0 ? placement.Width : size.ContentWidthTwips)
+                            && !placement.Band.Items.Any(other => !ReferenceEquals(item, other) && other.Element.LeftTwips >= element.LeftTwips + element.WidthTwips
+                                && other.Element.LeftTwips < end && other.Element.TopTwips < item.Element.TopTwips + element.HeightTwips
+                                && other.Element.TopTwips + Math.Max(1, ItemHeight(other)) > item.Element.TopTwips))
+                            element.WidthTwips = width;
+                    }
+                    // Preserve the right edge of a fixed string. If only a glyph or two overhangs on
+                    // the left, recover it from unused space, never from another value or a frame.
+                    if (!translate && ReportObjectRenderer.IsRightFixedString(element) && content.Length > 0 && !content.Contains('<')
+                        && element.BackgroundColor is "" or "transparent" && !element.Visual.HasDropShadow
+                        && element.Visual is { LeftLine: "NoLine", RightLine: "NoLine", TopLine: "NoLine", BottomLine: "NoLine" })
+                    {
+                        var plain = System.Net.WebUtility.HtmlDecode(content);
+                        if (!plain.Any(char.IsControl) && ReportPdfExport.LegacyTextWidth(element, plain) is { } measured)
+                        {
+                            var needed = (int)Math.Ceiling(20 * measured) + element.IndentTwips + 1 - element.WidthTwips;
+                            if (needed > 0 && needed <= (double)element.FontSize * 40 && needed <= element.LeftTwips)
+                            {
+                                var start = item.Element.LeftTwips - needed;
+                                var clear = !placement.Band.Items.Any(other =>
+                                {
+                                    var e = other.Element;
+                                    if (ReferenceEquals(item, other) || e.TopTwips >= item.Element.TopTwips + element.HeightTwips
+                                        || e.TopTwips + Math.Max(1, ItemHeight(other)) <= item.Element.TopTwips) return false;
+                                    // An enclosing box permits text in its interior, but not across its border.
+                                    if (e.Kind == "Box" && e.LeftTwips < start && e.LeftTwips + e.WidthTwips >= item.Element.LeftTwips + element.WidthTwips) return false;
+                                    return e.LeftTwips < item.Element.LeftTwips && e.LeftTwips + Math.Max(1, e.WidthTwips) >= start;
+                                });
+                                if (clear)
+                                {
+                                    element.LeftTwips -= needed; element.WidthTwips += needed;
+                                    content = CrystalDeviceText.FitRightOverhang(element, content, plain);
+                                }
+                            }
+                        }
+                    }
                     if (!element.HasRotatedText) content = CrystalDeviceText.PreviewSingleLine(element, content, item.NarrowedByFrame);
                     if (element.Visual.TightHorizontal && !element.HasRotatedText && element.Kind is "Field" or "Text" or "FieldHeading")
                         CrystalDeviceText.FitTightFrame(element, content, textLines);
                     var painted = new ReportPageObject(element, content, item.Analysis)
-                    { Table = item.Table, TextLines = textLines, UnmaskedNumericContent = numericContent };
+                    { Table = (item.Owner ?? this).ResolveTablePageValues(item.Table, current.Number, counts[index], placement.Band.RepeatedHeader),
+                        TextLines = textLines, UnmaskedNumericContent = numericContent };
                     var overprint = ReportObjectRenderer.IsDuplicateNativeTextPaint(objects.LastOrDefault(), painted,
                         size.MarginLeftTwips + placement.Left, size.MarginTopTwips + placement.Top);
                     objects.Add(painted);
@@ -2197,7 +2262,7 @@ public sealed partial class ReportLayoutSession
         }
         // The formula page number stays vertical; navigation indexes the physical sheets.
         foreach (var node in _navigationGroups.Keys)
-            if (node.PageIndex > 0) node.PageIndex = firstSheet[node.PageIndex - 1];
+            if (node.PageIndex > 0) node.PageIndex = node.PageIndex <= firstSheet.Length ? firstSheet[node.PageIndex - 1] : snapshots.Count + 1;
         // Nested sessions' own diagnostics reach the result, except those a parent already copied
         // with its "<element>: " prefix (ReportLayoutSession.Runtime), which would show twice.
         var diagnostics = new List<string>(_diagnostics);
@@ -2235,6 +2300,8 @@ public sealed partial class ReportLayoutSession
                         var visibleHeight = source.Kind == "Line" && height == 0 ? 1 : height;
                         if (top >= placement.Height || top + visibleHeight <= 0) continue;
                         var content = nullNativeField ? "" : ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader);
+                        content = duplicates.Suppress(item, placement.Band.Owner ?? this, index + 1, placement.Band.RepeatedHeader) ? ""
+                            : duplicates.PageCurrency(item, this, index + 1, content);
                         if (content.Length > 0 && NeedsNumericMask(source))
                         {
                             // The probe's key carries the painted box, so the box is built as the paint builds it.
@@ -2242,7 +2309,6 @@ public sealed partial class ReportLayoutSession
                             element.LeftTwips = source.LeftTwips; element.TopTwips = top; element.HeightTwips = height;
                             content = MaskNumericOverflow(item with { Element = element, Html = content });
                         }
-                        if (duplicates.Suppress(item, placement.Band.Owner ?? this, index + 1, placement.Band.RepeatedHeader)) content = "";
                         if (source.UseCrystalScreenMetrics && content.Length > 0 && source.CanGrow) TextMetrics(item with { Html = content });
                     }
                 }
@@ -2450,7 +2516,7 @@ public sealed partial class ReportLayoutSession
                 var reserve = 0;
                 for (var f = 0; f < footers.Count; f++)
                     reserve += Space(bands[f] = Blankness(FurnitureBand(footers[f].Id, nextFooterRows[index], pages[index].Number, counts[index], index + 1), index + 1));
-                if (reserve != pages[index].FooterReserve) return false;
+                if (reserve != pages[index].FooterReserve || bands.Any(ResetsAfterFooter) != pages[index].FooterResetsNumber) return false;
             }
             settledFooters = built;
             return true;
@@ -2487,7 +2553,7 @@ public sealed partial class ReportLayoutSession
         {
             if (!Subreports(band)) return band;
             var physical = fresh ? pages.Count + 1 : pages.Count;
-            var number = !fresh ? page.Number : resetPageNumber ? 1 : page.Number + 1;
+            var number = !fresh ? page.Number : (resetPageNumber || page.FooterResetsNumber) ? 1 : page.Number + 1;
             var count = ExpectedCount(physical - 1);
             return Furnished(PrepareFurnitureSubreports(ForPage(band, number, count, physicalPage: physical), number, count, physical, build: false), number, count, physical);
         }
@@ -2501,14 +2567,24 @@ public sealed partial class ReportLayoutSession
             lastPageBand = (index, page.Number, count, band);
             return band;
         }
+        bool ResetsAfterFooter(Band band) => !band.Blank && !band.Suppressed
+            && (band.Section.ResetPageNumberAfter || _layout.Areas.GetValueOrDefault(band.Section.Id)?.ResetPageNumberAfter == true);
         Page NewPage(int row, List<Band> repeats, bool withHeaders = true)
         {
+            _pageStartBands.Add(Math.Max(0, sequence));
             if (_paginationPageLimit > 0 && pages.Count >= _paginationPageLimit) throw new PagePrefixComplete();
             if (pages.Count >= 10000) throw new InvalidDataException("Report exceeds the 10,000-page layout limit.");
-            var number = resetPageNumber || pages.Count == 0 ? 1 : pages[^1].Number + 1;
+            var number = pages.Count == 0 || resetPageNumber || pages[^1].FooterResetsNumber ? 1 : pages[^1].Number + 1;
             var footerRow = footerRows is not null && pages.Count < footerRows.Count ? footerRows[pages.Count] : row;
-            var reserve = footers.Sum(section => Space(Blankness(FurnitureBand(section.Id, footerRow, number, ExpectedCount(pages.Count), pages.Count + 1), pages.Count + 1)));
-            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve, FooterReserve = reserve };
+            var reserve = 0;
+            var footerResets = false;
+            foreach (var section in footers)
+            {
+                var footer = Blankness(FurnitureBand(section.Id, footerRow, number, ExpectedCount(pages.Count), pages.Count + 1), pages.Count + 1);
+                reserve += Space(footer);
+                footerResets |= ResetsAfterFooter(footer);
+            }
+            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve, FooterReserve = reserve, FooterResetsNumber = footerResets };
             resetPageNumber = false;
             if (withHeaders) AddHeaders(next, row);
             if (next.Cursor >= next.Bottom)
@@ -2622,12 +2698,43 @@ public sealed partial class ReportLayoutSession
             List<Item>? pageStartInk = null;
             HashSet<string>? splittableGrids = null;
             var growth = new List<(int Bottom, int Amount, int Left, int Right, bool NativeGrid)>();
+            // A native cross-tab is designed with a placeholder width. A text/field beside it, not
+            // over it, keeps its gap from the last column as the grid expands on this sheet.
+            List<(int Top, int Bottom, int Right, int Delta)>? sideGrowth = null;
+            foreach (var grid in source.Items)
+            {
+                if (grid.Element.IsSuppressed || grid.Element.Kind != "CrossTab" ||
+                    grid.Analysis is not { Table: { NativeCrossTab: not null } data } analysis || analysis.Rows.Count == 0) continue;
+                var e = grid.Element;
+                var room = (printableWidth ?? size.ContentWidthTwips) - e.LeftTwips;
+                if (room < ReportTabularData.MinimumPaneWidthTwips) continue;
+                var panes = data.PaginateColumns(room, e.FontSize, analysis.Definition.RowHeightTwips);
+                if (panes.Count != 1) continue; // a horizontally tiled table has no single right edge on this sheet
+                var first = panes[0].Headers.FirstOrDefault() ?? panes[0].Rows.FirstOrDefault();
+                if (first is null) continue;
+                var delta = first.Columns.Sum(c => c.WidthTwips) - e.WidthTwips;
+                if (delta > 0) (sideGrowth ??= []).Add((e.TopTwips, e.TopTwips + e.HeightTwips, e.LeftTwips + e.WidthTwips, delta));
+            }
             var ordered = true;
             for (var index = 1; index < source.Items.Count && ordered; index++) ordered = source.Items[index - 1].Element.TopTwips <= source.Items[index].Element.TopTwips;
             foreach (var sourceItem in ordered ? source.Items : (IEnumerable<Item>)source.Items.OrderBy(i => i.Element.TopTwips))
             {
                 var item = (sourceItem.Owner ?? source.Owner ?? this).ResolveDeferredSubreport(sourceItem);
                 if (item.Element.IsSuppressed) { items.Add(item); continue; }
+                if (sideGrowth is not null && item.Element.Kind is "Field" or "FieldHeading" or "Text")
+                {
+                    var e = item.Element;
+                    var dx = 0;
+                    foreach (var g in sideGrowth)
+                        if (e.LeftTwips >= g.Right && e.TopTwips >= g.Top && e.TopTwips < g.Bottom)
+                            dx = Math.Max(dx, g.Delta);
+                    if (dx > 0 && e.LeftTwips + e.WidthTwips + dx <= (printableWidth ?? size.ContentWidthTwips))
+                    {
+                        var moved = e.CloneFor(e.SectionId, e.Name);
+                        moved.Id = e.Id; moved.TopTwips = e.TopTwips; moved.LeftTwips = e.LeftTwips + dx;
+                        item = item with { Element = moved };
+                    }
+                }
                 var shift = 0;
                 foreach (var g in growth)
                     if (g.Bottom <= item.Element.TopTwips && (source.Section.RelativePositions || g.Left < item.Element.LeftTwips + item.Element.WidthTwips && item.Element.LeftTwips < g.Right))

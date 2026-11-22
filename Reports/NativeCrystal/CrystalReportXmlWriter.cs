@@ -855,7 +855,7 @@ internal static class CrystalReportXmlWriter
             writer.WriteStartElement("Text");
             writer.WriteString(reportObject.Text);
             writer.WriteEndElement();
-            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0 || run.FontConditionFormulas.Count > 0 || run.CharacterSpacingTwips > 0) ||
+            if (reportObject.TextRuns.Any(run => run.Paragraph is not null || run.Binding.Length > 0 || run.FontConditionFormulas.Count > 0 || run.CharacterSpacingTwips > 0) ||
                 reportObject.TextRuns.Select(run => (run.FontFamily, run.Size, run.Bold, run.Italic, run.Underline, run.Color)).Distinct().Skip(1).Any())
             {
                 writer.WriteStartElement("FlexKitVisual");
@@ -871,6 +871,7 @@ internal static class CrystalReportXmlWriter
                     Attr(writer, "Color", run.Color);
                     if (run.CharacterSpacingTwips > 0) Attr(writer, "CharacterSpacingTwips", run.CharacterSpacingTwips);
                     writer.WriteString(run.Text);
+                    run.Paragraph?.ToXml().WriteTo(writer);
                     run.NativeDateTimeFormat?.ToXml().WriteTo(writer);
                     if (run.FontConditionFormulas.Count > 0)
                     {
@@ -922,6 +923,8 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "RightLineStyle", border.RightLineStyle);
         Attr(writer, "TopLineStyle", border.TopLineStyle);
         if (border.LineWidth is { } width) Attr(writer, "LineWidth", width);
+        if (border.CornerEllipseWidth > 0 && border.CornerEllipseHeight > 0)
+        { Attr(writer, "CornerEllipseWidth", border.CornerEllipseWidth); Attr(writer, "CornerEllipseHeight", border.CornerEllipseHeight); }
 
         writer.WriteStartElement("BorderConditionFormulas");
         foreach (var condition in border.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
@@ -934,6 +937,7 @@ internal static class CrystalReportXmlWriter
     private static void WriteObjectFormat(XmlWriter writer, CrystalObjectFormatModel format)
     {
         writer.WriteStartElement("ObjectFormat");
+        if (format.BooleanYesNo) Attr(writer, "FlexKitFormatString", "Yes/No");
         Attr(writer, "CssClass", format.CssClass);
         Attr(writer, "EnableCanGrow", LowerBool(format.EnableCanGrow));
         Attr(writer, "EnableCloseAtPageBreak", LowerBool(format.EnableCloseAtPageBreak));

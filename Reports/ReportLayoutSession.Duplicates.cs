@@ -57,6 +57,22 @@ public sealed partial class ReportLayoutSession
         private readonly Dictionary<(ReportLayoutSession Owner, string Element), (int Row, int Occurrence, object? Value, bool Suppressed)> _previous = [];
         private readonly Dictionary<(ReportLayoutSession Owner, string Section, int Page), int> _firstDetails = [];
 
+        private readonly HashSet<(ReportLayoutSession Owner, string Source, int Page)> _currencySymbols = [];
+
+        public string PageCurrency(Item item, ReportLayoutSession fallback, int page, string html)
+        {
+            if (html.Length == 0 || item.Element.Kind != "Field" || item.Element.FormatString.Length != 0
+                || item.Element.NativeNumericFormat is not { OneCurrencySymbolPerPage: true, CurrencySymbolType: 2, UnsupportedReason: null } format
+                || item.DuplicateValue?.Value is not (sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)) return html;
+            var raw = item.DuplicateValue.Value!;
+            var without = format with { CurrencySymbolType = 0 };
+            var plain = without.Format(raw);
+            if (plain == format.Format(raw) || _currencySymbols.Add((item.Owner ?? fallback, item.Element.SourceKey, page))) return html;
+            var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name);
+            element.NativeNumericFormat = without;
+            return ReportObjectRenderer.Content(element, _ => plain);
+        }
+
         // This is presentation only, after pagination. Compare original values per
         // object/section iteration, leave the occupied space and data exports intact.
         // Crystal prints the first Detail occurrence on each physical page even if

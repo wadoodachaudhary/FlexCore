@@ -39,7 +39,7 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<ReportNativeCrossTabTemplate> SummaryLabels { get; init; } = [];
     /// <summary>A cell holds one line per summary at equal steps: a stacked grid, or a row-less grid with several summaries.</summary>
-    internal bool StackedLines => StackFormats.Length > 0 || ColumnSumFormat.Contains(',');
+    internal bool StackedLines => StackFormats.Length > 0 || ColumnSumFormat.Contains(',') && Templates.Count == 0;
     /// <summary>Every saved cell format: the cell templates, the subtotal captions and the summary labels.</summary>
     internal IEnumerable<ReportNativeCrossTabCellStyle> CellFormats => Templates.Select(template => template.Style)
         .Concat(ColumnSubtotalCaptions.Select(caption => caption.Style)).Concat(SummaryLabels.Select(label => label.Style));

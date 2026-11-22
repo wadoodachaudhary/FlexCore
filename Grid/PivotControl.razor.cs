@@ -941,10 +941,12 @@ public partial class PivotControl<TValue>
         return DataSource.Where(result.Contains).ToArray();
     }
 
-    internal object? ExportCellValue(int row, int column)
+    internal object? ExportCellValue(int row, int column, out int sourceRowCount)
     {
         var valueColumn = _valueColumns[column - _effectiveRowFields.Count];
-        return Aggregate(ExportCellRows(row, column, 1, 1), valueColumn.ValueConfig);
+        var records = ExportCellRows(row, column, 1, 1);
+        sourceRowCount = records.Count;
+        return Aggregate(records, valueColumn.ValueConfig);
     }
 
     /// <summary>A shown value cell's aggregate, as the pivot computed it for display.</summary>

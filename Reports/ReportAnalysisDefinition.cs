@@ -30,6 +30,8 @@ public sealed record ReportPlotFrame(double Left,double Top,double Right,double 
     public bool IsValid => Left >= 0 && Left < Right && Right <= 1 && Top >= 0 && Top < Bottom && Bottom <= 1;
 }
 
+public sealed record ReportHorizontalBarText(string ValueTitle, string Color, double TitlePoints, double CaptionPoints, double TickPoints, ReportPlotFrame? Frame);
+
 public sealed record ReportChartRightLegend(string CategoryTitle, string ValueTitle, bool CategoryGrid, bool ValueGrid)
 {
     // A grouped plot still keys its measures when only one series survives record selection.
@@ -97,6 +99,8 @@ public sealed partial class ReportAnalysisDefinition
     public int AccumulatorCount { get; set; }
     public bool AccumulatorWithTies { get; set; }
     public string Title { get; set; } = "";
+    public ReportHorizontalBarText? HorizontalBarText { get; set; }
+    internal string SavedBarValueTitle { get; set; } = "";
     public ChartType ChartType { get; set; } = ChartType.Bar;
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ReportChartPrintAxis? PrintAxis { get; set; }
@@ -419,7 +423,7 @@ public sealed partial class ReportAnalysisDefinition
     private ReportAnalysisDefinition CloneNode() => new()
     {
         RowRanking = RowRanking, AccumulatorVariable = AccumulatorVariable, AccumulatorCount = AccumulatorCount, AccumulatorWithTies = AccumulatorWithTies,
-        Title = Title, PieColorScheme = PieColorScheme, SpatialStyle = SpatialStyle, LineStyle = LineStyle, PrintAxis = PrintAxis, PerspectivePie = PerspectivePie, ChartType = ChartType, ChartThreeDimensional = ChartThreeDimensional, PerspectiveStyle = PerspectiveStyle, ChartCategoryLegend = ChartCategoryLegend, RightCategoryLegend = RightCategoryLegend, CategoryField = CategoryField, CategoryFormat = CategoryFormat, RankedCategoryCount = RankedCategoryCount, CrossTabSeries = CrossTabSeries, SeriesField = SeriesField, GroupScope = GroupScope,
+        Title = Title, HorizontalBarText = HorizontalBarText, PieColorScheme = PieColorScheme, SpatialStyle = SpatialStyle, LineStyle = LineStyle, PrintAxis = PrintAxis, PerspectivePie = PerspectivePie, ChartType = ChartType, ChartThreeDimensional = ChartThreeDimensional, PerspectiveStyle = PerspectiveStyle, ChartCategoryLegend = ChartCategoryLegend, RightCategoryLegend = RightCategoryLegend, CategoryField = CategoryField, CategoryFormat = CategoryFormat, RankedCategoryCount = RankedCategoryCount, CrossTabSeries = CrossTabSeries, SeriesField = SeriesField, GroupScope = GroupScope,
         RowFields = [.. RowFields], ColumnFields = [.. ColumnFields], Measures = Measures.Select(m => m.Clone()).ToList(), ShowLegend = ShowLegend, ShowTotals = ShowTotals,
         EachRecord = EachRecord, ReportGroupChart = ReportGroupChart, SummariesAsCategories = SummariesAsCategories, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], OriginalOrderFields = [.. OriginalOrderFields],
         GroupKinds = new Dictionary<string, int>(GroupKinds, StringComparer.OrdinalIgnoreCase),
@@ -437,6 +441,10 @@ public sealed partial class ReportAnalysisDefinition
     }
     private XElement ToXmlNode() => new("FlexKitAnalysis", new XAttribute("Title", Title), new XAttribute("ChartType", ChartType),
         PieColorScheme != ReportPieColorScheme.Original ? new XAttribute("PieColorScheme", PieColorScheme) : null,
+        HorizontalBarText is {} hb ? new XElement("HorizontalBarText", new XAttribute("ValueTitle", hb.ValueTitle),
+            new XAttribute("Color", hb.Color), new XAttribute("TitlePoints", hb.TitlePoints), new XAttribute("CaptionPoints", hb.CaptionPoints),
+            new XAttribute("TickPoints", hb.TickPoints), hb.Frame is {} hf ? new XElement("Frame", new XAttribute("Left",hf.Left),
+                new XAttribute("Top",hf.Top),new XAttribute("Right",hf.Right),new XAttribute("Bottom",hf.Bottom)) : null) : null,
         SpatialStyle?.ToXml(),
         LineStyle is {} line ? new XElement("LineStyle", new XAttribute("ValueFormat", line.ValueFormat), new XAttribute("Markers",line.Markers), new XAttribute("Grid",line.Grid)) : null,
         PerspectivePie ? new XAttribute("PerspectivePie", true) : null,
@@ -490,6 +498,10 @@ public sealed partial class ReportAnalysisDefinition
         {
             Title = (string?)xml.Attribute("Title") ?? "",
             PieColorScheme = Enum.TryParse<ReportPieColorScheme>((string?)xml.Attribute("PieColorScheme"), out var scheme) ? scheme : ReportPieColorScheme.Original,
+            HorizontalBarText = xml.Element("HorizontalBarText") is {} hb ? new((string?)hb.Attribute("ValueTitle") ?? "",
+                (string?)hb.Attribute("Color") ?? "#000000", (double?)hb.Attribute("TitlePoints") ?? 0, (double?)hb.Attribute("CaptionPoints") ?? 0,
+                (double?)hb.Attribute("TickPoints") ?? 0, hb.Element("Frame") is {} hf ? new((double)hf.Attribute("Left")!, (double)hf.Attribute("Top")!,
+                    (double)hf.Attribute("Right")!, (double)hf.Attribute("Bottom")!) : null) : null,
             SpatialStyle = ReportChartSpatialStyle.Read(xml.Element("SpatialStyle")),
             ChartType = Enum.TryParse<ChartType>((string?)xml.Attribute("ChartType"), out var chart) ? chart : (ChartType)(-1),
             LineStyle = xml.Element("LineStyle") is {} line ? new((string?)line.Attribute("ValueFormat") ?? "0.##", (bool?)line.Attribute("Markers") ?? true, (bool?)line.Attribute("Grid") ?? true) : null,

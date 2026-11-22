@@ -197,6 +197,7 @@ internal static partial class CrystalReportContentsParser
                         var visible = probe.LoadUInt16();
                         var placement = probe.LoadEnum();
                         if (visible > 1 || placement is < 0 or > 3) throw new InvalidDataException("Unknown graph legend style.");
+                        if (nativeType == 0) definition.SavedBarValueTitle = captions[5];
                         if (definition.ChartThreeDimensional) savedThreeDimensionalLegend = visible == 1;
                         else categoryLegend = nativeType == 0 && visible == 1 && placement == 3;
                         savedLegendEnabled = visible == 1;
@@ -593,7 +594,19 @@ internal static partial class CrystalReportContentsParser
             var totals = nativeCells.Where(c => c.Axis == 216 && c.Row == 0).Select(c => c.Cell).TakeLast(measureCount).ToArray();
             static bool Stacks(CrystalReportObjectModel[] cells) => cells.Select(cell => cell.Left).Distinct().Count() == 1
                 && cells.Zip(cells.Skip(1)).All(pair => pair.First.Top + pair.First.Height == pair.Second.Top);
-            if (column is not null && details.Length == measureCount && totals.Length == measureCount && Stacks(details) && Stacks(totals))
+            // A suppressed label/total can leave room for freely spaced numeric summaries. Their
+            // actual positions, not an equal line pitch, associate each value with its external label.
+            bool Spaced(CrystalReportObjectModel[] cells) => cells.Length == measureCount
+                && cells.All(c => c.Width == cells[0].Width && c.Left == cells[0].Left && c.Height > 0)
+                && cells.Zip(cells.Skip(1)).All(p => p.First.Top + p.First.Height <= p.Second.Top);
+            var spaced = measureCount > 1 && Spaced(details) && Spaced(totals)
+                && !Stacks(details) && rowCaption.Format.EnableSuppress
+                && totals.All(c => c.Format.EnableSuppress && c.Format.ConditionReferences.Count == 0)
+                && totalStyles.GetValueOrDefault(207)?.Format.EnableSuppress == true
+                && details[0].Left >= owner.Left && details[0].Top > owner.Top
+                && details.All(c => c.Format.ConditionReferences.Count == 0 && c.FontConditionReferences.Count == 0
+                    && c.Border.ConditionReferences.Count == 0);
+            if (column is not null && details.Length == measureCount && totals.Length == measureCount && (spaced || Stacks(details) && Stacks(totals)))
             {
                 var detail = details[0]; var total = totals[0];
                 var stackHeight = details[^1].Top + details[^1].Height - detail.Top;
@@ -620,6 +633,18 @@ internal static partial class CrystalReportContentsParser
                 definition.RowHeaderWidthTwips = Math.Max(360, rowCaption.Width + 2 * paddingX);
                 definition.ValueColumnWidthTwips = Math.Max(360, detail.Width + 2 * paddingX);
                 definition.RowHeightTwips = Math.Max(180, stackHeight + 2 * paddingY);
+                if (spaced)
+                {
+                    definition.NativeCrossTab = definition.NativeCrossTab with
+                    {
+                        HeaderHeight = detail.Top - owner.Top,
+                        PaddingY = 0,
+                        SuppressRowGrandTotals = true,
+                        Templates = details.Select((c, i) => new ReportNativeCrossTabTemplate(216, 1, 0, i,
+                            c.Left - owner.Left, c.Top - owner.Top, c.Width, c.Height, paddingX, 0, "",
+                            CellStyle(c, fill, "right"))).ToArray()
+                    };
+                }
             }
         }
         var summaryCells = nativeCells.Where(c => c.Axis == 216).GroupBy(c => (c.Column, c.Row)).ToArray();
@@ -888,7 +913,8 @@ internal static partial class CrystalReportContentsParser
             .SelectMany(caption => caption.TextRuns).Where(run => run.Binding.Length > 0).DistinctBy(run => run.Binding)
             .Select(run =>
             {
-                var type = data.FormulaFields.FirstOrDefault(field => field.FormulaName == run.Binding)?.ValueType
+                var type = run.Binding is "PageNumber" or "TotalPageCount" ? 4
+                    : data.FormulaFields.FirstOrDefault(field => field.FormulaName == run.Binding)?.ValueType
                     ?? data.SummaryFields.Select((field, index) => (field, index)).Where(entry => SummaryReferencePlaceholder(entry.index) == run.Binding
                         || SummaryFormulaName(entry.field, data) == run.Binding).Select(entry => (int?)(entry.field.Operation is 6 or 9 ? 4 : entry.field.ValueType)).FirstOrDefault()
                     ?? data.RunningTotalFields.FirstOrDefault(field => field.FormulaName == run.Binding)?.ValueType ?? 6;

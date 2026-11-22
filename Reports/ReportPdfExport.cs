@@ -55,8 +55,10 @@ internal static class ReportPdfExport
                 if (Native && FontMode == ReportPdfFontMode.Designer) return Size;
                 if (LegacyArial && Size == Math.Floor(Size) && LegacyArialSizes.TryGetValue(((int)Size, Bold, Italic), out var measured)) return measured;
                 if (LegacyTimes && Size == Math.Floor(Size) && LegacyTimesSizes.TryGetValue(((int)Size, Bold, Italic), out var times)) return times;
+                // MS Shell Dlg is a logical Windows face. In the legacy export its 10pt cell has an 8.85pt em.
+                if (Native && Family.Equals("MS Shell Dlg", StringComparison.OrdinalIgnoreCase)) return Size * .885;
                 var scale = LegacyArial ? (Bold && Size < 16 ? .875 : 2048 / 2288d) : LegacyTimes ? (Bold ? .885 : .89) : 1d;
-                if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri" or "carlito" or "tahoma")
+                if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri" or "carlito" or "tahoma" or "verdana")
                 {
                     // Crystal's PDF realization uses the cell height for these
                     // faces: convert it to em using the face's ascent/descent.
@@ -191,10 +193,23 @@ internal static class ReportPdfExport
             Fill(page, x + width, y + offset, offset, height, "#000000");
             Fill(page, x + offset, y + height, width, offset, "#000000");
         }
+        if (element.Kind == "Box" && visual.CornerEllipseWidth > 0 && visual.CornerEllipseHeight > 0
+            && visual.LeftLine == "Single" && visual.RightLine == "Single"
+            && visual.TopLine is "Single" or "NoLine" && visual.BottomLine is "Single" or "NoLine" && width > 0 && height > 0)
+        {
+            RoundedBox(page, x, y, width, height, element);
+            return;
+        }
         Fill(page, x, y, width, height, element.BackgroundColor);
         var outside = element.Kind == "Field" && !element.CanGrow &&
             (element.NativeNumberFormat is not null || element.NativeNumericFormat is not null);
-        if (element.Kind != "Chart") Borders(page, x, y, width, height, visual, outside);
+        if (ReportObjectRenderer.NativeTextFrame(element))
+        {
+            // Borders(outside) places the inner stroke edges at the rectangle; leave the authored text and its origin unchanged.
+            Borders(page, x-1, y-1, width+2, height+2, visual, true);
+            outside = true;
+        }
+        else if (element.Kind != "Chart") Borders(page, x, y, width, height, visual, outside);
         if (element.Kind == "Box" || width <= 0 || height <= 0) return;
         page.Save();
         if (item.Table?.NativeCrossTab == null) page.Clip(x, y, width, height);
@@ -214,7 +229,7 @@ internal static class ReportPdfExport
             BarChart(page, chart, x, y, width, height, element.UseCrystalScreenMetrics);
         else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartType: ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble } stage)
             Vector(page, PrintedStageChart.Draw(stage.Definition.ChartType, ReportAnalysisGraphic.Series(stage), stage.Definition.Title,
-                width, height, stage.Definition.ShowLegend, stage.Definition.PiePalette ?? ReportAnalysisGraphic.CrystalBarPalette, stage.Definition.ReportGroupChart), x, y, width, height, "fill");
+                width, height, stage.Definition.ShowLegend, stage.Definition.PiePalette ?? ReportAnalysisGraphic.CrystalBarPalette, stage.Definition.ReportGroupChart, horizontalText: stage.Definition.HorizontalBarText), x, y, width, height, "fill");
         else if (item.Analysis is not null)
             throw new NotSupportedException("This analytical object has no printable table fragments. Export HTML for this analytical object.");
         else if (element.Kind == "Picture")
@@ -274,10 +289,20 @@ internal static class ReportPdfExport
                 : element.UseCrystalScreenMetrics && !wrap && ink.Em < ink.Size && element.Kind is "Text" or "FieldHeading"
                     ? NativeClip.Paint
                 : NativeClip.None;
-            Text(page, Runs(item.FormattedContent, InkFor(element, fontMode)), x + left + indent, y + top,
-                textWidth, Math.Max(0, height - top - bottom), Align(element), wrap,
-                ReportObjectRenderer.TextLineLimit(element),
-                measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element), nativeClipWidth: nativeClipWidth, clip: clip);
+            if (item.FormattedContent.StartsWith("<div data-fx-paragraph=", StringComparison.Ordinal))
+                Paragraphs(page, item.FormattedContent, ink, x + left + indent, y + top, textWidth, height - top - bottom, ReportObjectRenderer.TextLineLimit(element));
+            else
+            {
+                var runs = Runs(item.FormattedContent, ink);
+                // Legacy Verdana is laid out at its authored size before the export reduces the painted em.
+                // Keep the original width for alignment and clipping; only the line-break test uses the larger glyphs.
+                var prepared = wrap && item.TextLines is null && element.Kind is ("Text" or "FieldHeading") && ink.Native && ink.Size > ink.Em
+                    && element.FontFamily.Equals("Verdana", StringComparison.OrdinalIgnoreCase) && element.Visual.Runs.Count == 0
+                    ? Lines(runs, textWidth * ink.Em / ink.Size, true) : null;
+                Text(page, runs, x + left + indent, y + top, textWidth, Math.Max(0, height - top - bottom), Align(element), wrap,
+                    ReportObjectRenderer.TextLineLimit(element), measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element),
+                    nativeClipWidth: nativeClipWidth, clip: clip, prepared: prepared, anchorRight: ReportObjectRenderer.IsRightFixedString(element));
+            }
         }
         page.Restore();
         // Opaque chart canvases must not cover their authored frame. Native graph frames surround the data rectangle.
@@ -377,6 +402,13 @@ internal static class ReportPdfExport
     private static Ink InkFor(ReportDesignerElement element, ReportPdfFontMode fontMode) => new(element.FontFamily, (double)element.FontSize,
         element.Bold, element.Italic, element.Underline, Color(element.TextColor), element.UseCrystalScreenMetrics) { FontMode = fontMode, Dpi = ReportObjectRenderer.TextDpi(element) };
 
+    // Optional ink measurement must not make browser preview depend on PDF font availability.
+    internal static double? LegacyTextWidth(ReportDesignerElement element, string text)
+    {
+        try { return Measure(text, InkFor(element, ReportPdfFontMode.LegacyVb)); }
+        catch (Exception error) when (error is NotSupportedException or InvalidDataException or FileNotFoundException) { return null; }
+    }
+
     private static string Align(ReportDesignerElement element) => element.HorizontalAlignment.ToLowerInvariant() switch
     {
         "right" => "right", "center" or "horizontalcenter" => "center", "justified" => "justify",
@@ -420,6 +452,8 @@ internal static class ReportPdfExport
     private static void Stroke(NativePdfPage page, double x1, double y1, double x2, double y2, string style, string color, int? width)
     {
         if (style is "NoLine" or "" or "None") return;
+        // A cosmetic dotted pen has a device hairline width but an independent point-space dash cycle.
+        if (width == 0 && style is "Dot" or "DotLine") { page.Line(x1, y1, x2, y2, Color(color), 0, [1, 3]); return; }
         var points = width is null ? .75 : Math.Max(.05, width.Value / 20d);
         if (style is "Double" or "DoubleLine")
         {
@@ -434,6 +468,33 @@ internal static class ReportPdfExport
             page.Line(x1, y1, x2, y2, Color(color), points,
                 style.StartsWith("Dash", StringComparison.Ordinal) ? [3 * points, 2 * points] : style.StartsWith("Dot", StringComparison.Ordinal) ? [points, points] : null);
         else throw new NotSupportedException($"Unsupported line style '{style}'.");
+    }
+
+    // One box can extend across several bands. Leave edges at a band seam open, and
+    // round only the corners at the physical top and bottom of the authored frame.
+    private static void RoundedBox(NativePdfPage page, double x, double y, double width, double height, ReportDesignerElement element)
+    {
+        var v = element.Visual;
+        var top = v.TopLine == "Single"; var bottom = v.BottomLine == "Single";
+        var pen = Math.Min(Math.Min(width, height), BorderWidth("Single", v.LineWidthTwips));
+        var l = x + pen / 2; var r = x + width - pen / 2;
+        var t = y + (top ? pen / 2 : 0); var b = y + height - (bottom ? pen / 2 : 0);
+        var rx = Math.Min(v.CornerEllipseWidth / 40d, (r-l)/2);
+        var ry = Math.Min(v.CornerEllipseHeight / 40d, (b-t)/(top && bottom ? 2 : 1));
+        const double k = .5522847498307936;
+        string P(double a, double z) => FormattableString.Invariant($"{a:0.###} {z:0.###}");
+        var a = P(l, top ? t+ry : t); var z = P(r, bottom ? b-ry : b);
+        var upper = top ? $"{P(l,t+ry*(1-k))} {P(l+rx*(1-k),t)} {P(l+rx,t)} c {P(r-rx,t)} l {P(r-rx*(1-k),t)} {P(r,t+ry*(1-k))} {P(r,t+ry)} c" : $"{P(r,t)} l";
+        var lower = bottom ? $"{P(r,b-ry*(1-k))} {P(r-rx*(1-k),b)} {P(r-rx,b)} c {P(l+rx,b)} l {P(l+rx*(1-k),b)} {P(l,b-ry*(1-k))} {P(l,b-ry)} c" : $"{P(l,b)} l";
+        var fill = element.BackgroundColor is "" or "transparent" or "none" ? null : Color(element.BackgroundColor);
+        var path = $"{a} m {upper} {z} l {lower} h";
+        if (top && bottom) page.Path(path, fill, Color(v.BorderColor), pen);
+        else
+        {
+            if (fill != null) page.Path(path, fill, null);
+            var start = P(l, bottom ? b-ry : b);
+            page.Path($"{start} m {a} l {(top ? upper : P(r,t) + " m")} {z} l {(bottom ? lower : "")}", null, Color(v.BorderColor), pen);
+        }
     }
 
     private static void Fill(NativePdfPage page, double x, double y, double w, double h, string value)
@@ -453,6 +514,35 @@ internal static class ReportPdfExport
             _ when Enum.TryParse<System.Drawing.KnownColor>(value, true, out var named) && named is >= System.Drawing.KnownColor.AliceBlue and <= System.Drawing.KnownColor.YellowGreen => "#" + (System.Drawing.Color.FromKnownColor(named).ToArgb() & 0xffffff).ToString("X6", Invariant),
             _ => throw new NotSupportedException($"Unsupported PDF color '{value}'.")
         };
+    }
+
+    private static void Paragraphs(NativePdfPage page, string html, Ink ink, double x, double y, double width, double height, int limit)
+    {
+        var body = new HtmlParser().ParseDocument(html).Body!;
+        var at = y;
+        var count = 0;
+        foreach (var block in body.Children)
+        {
+            var css = Styles(block);
+            var left = Length(css["padding-left"]); var right = Length(css["padding-right"]);
+            var first = Length(css["text-indent"]);
+            var explicitLines = block.Children.Where(e => e.HasAttribute("data-fx-native-line")).ToArray();
+            var sources = explicitLines.Length == 0 ? new[] { block } : explicitLines;
+            foreach (var source in sources)
+            {
+                if (limit > 0 && count >= limit || at >= y + height) return;
+                var baseInk = source.FirstElementChild is { } span ? Apply(ink, Styles(span)) : ink;
+                var runs = Runs(source.InnerHtml, baseInk);
+                var available = width - left - right;
+                var lines = Lines(runs, available, explicitLines.Length == 0, firstOffset: first);
+                foreach (var line in lines)
+                {
+                    if (limit > 0 && count >= limit || at >= y + height) return;
+                    Text(page, runs, x + left + first, at, available - first, y + height - at, css["text-align"], false, prepared: [line]);
+                    first = 0; at += line.Height; count++;
+                }
+            }
+        }
     }
 
     private static IReadOnlyList<Run> Runs(string html, Ink ink, bool collapse = false)
@@ -508,14 +598,16 @@ internal static class ReportPdfExport
         return ink;
     }
 
-    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15, bool breakLongWords = true)
+    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15, bool breakLongWords = true, double firstOffset = 0)
     {
         var lines = new List<TextLine>();
         var current = new List<Run>();
         var used = 0d;
         var tallest = runs.Count == 0 ? 10 * lineHeight : runs[0].Ink.Leading(lineHeight);
+        var fullWidth = width; width -= firstOffset;
         void Finish(bool paragraphEnd = false)
         {
+            width = fullWidth;
             lines.Add(new(current.ToArray(), used, tallest, paragraphEnd));
             current.Clear(); used = 0; tallest = runs.Count == 0 ? 10 * lineHeight : runs[0].Ink.Leading(lineHeight);
         }
@@ -610,12 +702,12 @@ internal static class ReportPdfExport
     private enum NativeClip { None, Break, Paint }
 
     private static double Text(NativePdfPage page, IReadOnlyList<Run> runs, double x, double y, double width, double height,
-        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true, double nativeClipWidth = 0, NativeClip clip = NativeClip.None)
+        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true, double nativeClipWidth = 0, NativeClip clip = NativeClip.None, IReadOnlyList<TextLine>? prepared = null, bool anchorRight = false)
     {
         if (clip == NativeClip.None && nativeClipWidth > 0) clip = NativeClip.Break;
         if (width <= 0 || height <= 0) return 0;
-        var lines = wrap ? MeasuredLines(runs, measuredLines, lineHeight, maxLines) ?? Lines(runs, width, true, lineHeight, breakLongWords)
-            : Lines(runs, width, false, lineHeight);
+        var lines = prepared ?? (wrap ? MeasuredLines(runs, measuredLines, lineHeight, maxLines) ?? Lines(runs, width, true, lineHeight, breakLongWords)
+            : Lines(runs, width, false, lineHeight));
         // Crystal draws a fixed single-line field's value as one line: the paragraphs after its first line break are
         // neither painted nor exported.
         if (!wrap && lines.Count > 1 && runs.Count > 0 && runs[0].Ink.Native) lines = lines.Take(1).ToList();
@@ -655,8 +747,8 @@ internal static class ReportPdfExport
                 runs2 = kept;
             }
             var lineWidth = clip == NativeClip.None ? line.Width : runs2.Sum(run => Measure(run.Text, run.Ink));
-            // A line wider than its box starts at the left edge and clips on the right whatever its alignment.
-            var offset = Math.Max(0, alignment == "right" ? width - lineWidth : alignment == "center" ? (width - lineWidth) / 2 : 0);
+            // Only fixed right-aligned native strings anchor an overwide line to its right edge.
+            var offset = anchorRight && alignment == "right" ? width - lineWidth : Math.Max(0, alignment == "right" ? width - lineWidth : alignment == "center" ? (width - lineWidth) / 2 : 0);
             var cursor = x + offset;
             var ascent = line.Runs.Count == 0 ? line.Height / lineHeight * .9 : line.Runs.Max(r => NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Ascent * r.Ink.Em / 1000);
             var descent = line.Runs.Count == 0 ? line.Height / lineHeight * .2 : line.Runs.Max(r => -NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Descent * r.Ink.Em / 1000);

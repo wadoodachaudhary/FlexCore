@@ -108,7 +108,12 @@ public sealed partial record ReportTabularData
                 var colors = new List<string>(); var lines = new List<string>();
                 for (var m=0;m<count;m++)
                 {
-                    var value = CellValue(definition, pivot, starts[c] + m, pivot.ExportCellValue(r, starts[c] + m), columnTotals);
+                    var value = CellValue(definition, pivot, starts[c] + m, pivot.ExportCellValue(r, starts[c] + m, out var contributors), columnTotals);
+                    // An unpopulated intersection has a printed numeric zero for an ordinary average.
+                    // A populated all-null average, weighted average or percentage retains its null result.
+                    if (value is "" && definition.Measures[m] is { Aggregate: ReportAggregateType.Average, PercentOfColumnTotal: null }
+                        && contributors == 0)
+                        value = 0m;
                     var display = FormatSummary(value, m < mask.Length ? mask[m] : definition.Measures[m].Format);
                     var template=templates.GetValueOrDefault((row.IsBold ? 0 : definition.RowFields.Count,
                         columns[c + offset].IsGrandTotal ? 0 : definition.ColumnFields.Count,m));

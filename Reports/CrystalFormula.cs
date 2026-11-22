@@ -694,8 +694,8 @@ public sealed class CrystalCustomFunctionLibrary : IReadOnlyDictionary<string, C
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 }
 
-/// <summary>Crystal's <c>Rnd</c> generator (minimal-standard LCG with a 32-slot shuffle table). The runtime seeds it from the clock in milliseconds, which its seeding
-/// always reduces to 1, so every run yields the same sequence. Keep one per report run.</summary>
+/// <summary>Crystal-compatible <c>Rnd</c> generator (minimal-standard LCG with a 32-slot shuffle table).
+/// Flex starts a repeatable stream per report run. An unseeded Crystal export is not guaranteed to reproduce that stream.</summary>
 public sealed class CrystalRandom
 {
     private readonly long[] _table = new long[32];

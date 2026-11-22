@@ -335,7 +335,60 @@ public partial class ReportWriterControl
         if (parameters is not null) parameters = ReportRangeParameters.BindSql(new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase));
         if (definition.PositionedSqlSelection is not null) parameters ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var execution = definition.PrepareSqlExecution(parameters, ReportSqlExecutionOptions.For(db));
-        return await asynchronous.ExecuteAsync(execution.Sql, parameters, cancellationToken);
+        return await asynchronous.ExecuteAsync(execution.Sql, ReportSqlParameters.For(execution.Sql, parameters), cancellationToken);
+    }
+
+    /// <summary>Lays out a report's first pages. With the estimator on, that is its first batch; a report still
+    /// unfinished after it and estimated long, or with many records, stays in batches with its estimate, and any other
+    /// is finished at once and has its exact count. A report that reads its subreports by page opens on at least
+    /// <see cref="ReportPageEstimateOptions.OpeningPages"/> pages and <see cref="ReportPageEstimateOptions.OpeningPrintedLines"/>
+    /// printed lines: exact if it ends within them, otherwise with its estimate. With the estimator off, the first page
+    /// alone, as before.</summary>
+    private async Task<(ReportLayoutResult Result, ReportPageEstimator? Estimator, int? Estimated)> PaginateFirstPagesAsync(ReportLayoutSession session, CancellationToken token)
+    {
+        var options = Options.PageEstimate;
+        if (!options.Enabled) return (await PaginateNativeSession(session, 1, token), null, null);
+        var input = session.CreatePageEstimateInput(options);
+        var estimator = new ReportPageEstimator(input, ReportPageEstimateWeights.Default, options);
+        // A report that prints its page count prints this until it is laid out in full.
+        session.PageCountEstimate = estimator.Estimate(0).Pages;
+        var onDemand = session.LoadsSubreportsOnDemand;
+        var batch = Math.Max(1, onDemand ? options.OpeningPages : options.FirstBatchPages);
+        var result = await PaginateNativeSession(session, batch, token);
+        var mostPages = Math.Max(batch, options.FirstBatchPages);
+        while (onDemand && !result.IsComplete && batch < mostPages && PrintedLines(result) is var lines && lines < options.OpeningPrintedLines)
+        {
+            // The pages so far give the pages still needed for the lines; laid-out subreports are not read again.
+            batch = Math.Clamp((int)Math.Ceiling((double)options.OpeningPrintedLines * batch / Math.Max(1, lines)), batch + 1, mostPages);
+            result = await PaginateNativeSession(session, batch, token);
+        }
+        if (result.IsComplete) return (result, null, null);
+        var estimated = ObservePages(estimator, session, result);
+        if (!onDemand && !options.UsesBatches(estimated, input.Records)) return (await PaginateNativeSession(session, 0, token), null, null);
+        if (estimated != session.PageCountEstimate)
+        {
+            // The pages shown print the count: lay them out again with the better estimate.
+            session.PageCountEstimate = estimated;
+            result = await PaginateNativeSession(session, batch, token);
+            if (result.IsComplete) return (result, null, null);
+        }
+        return (result, estimator, estimated);
+    }
+
+    // Lines of text on the pages: the distinct heights at which an object prints something.
+    private static int PrintedLines(ReportLayoutResult result) => result.Snapshots.Sum(page => page.Bands
+        .SelectMany(band => band.Objects.Where(item => !string.IsNullOrWhiteSpace(item.FormattedContent)).Select(item => band.TopTwips + item.Element.TopTwips))
+        .Distinct().Count());
+
+    /// <summary>Shows the estimator the pages laid out since it last looked, and returns its page estimate: never
+    /// fewer than the pages laid out and the one that was being opened.</summary>
+    private static int ObservePages(ReportPageEstimator estimator, ReportLayoutSession session, ReportLayoutResult result)
+    {
+        var starts = session.PageStartBands;
+        for (var page = estimator.PagesSeen; page < result.Snapshots.Count && page < starts.Count; page++)
+            estimator.Observe(result.Snapshots[page], starts[page]);
+        var seen = estimator.PagesSeen;
+        return seen < starts.Count ? Math.Max(seen + 1, estimator.Estimate(starts[seen]).Pages) : seen + 1;
     }
 
     /// <summary>Paginates the rest of the active report (exports need every page); false when
@@ -361,7 +414,10 @@ public partial class ReportWriterControl
         await InvokeAsync(StateHasChanged);
         try
         {
-            var result = await PaginateNativeSession(session, page == 0 ? 0 : Math.Min(10000, Math.Max(page, tab.Pages.Count + 5)), token);
+            // A report in batches takes its next batch; one without an estimate a few pages past what is asked for.
+            var step = session.LoadsSubreportsOnDemand ? Math.Max(1, Options.PageEstimate.SubreportBatchPages)
+                : tab.PageEstimator is null ? 5 : Math.Max(1, Options.PageEstimate.BatchPages);
+            var result = await PaginateNativeSession(session, page == 0 ? 0 : Math.Min(10000, Math.Max(page, tab.Pages.Count + step)), token);
             token.ThrowIfCancellationRequested();
             if (version != _nativeNavigationVersion || !Tabs.Contains(tab)) return false;
             var expanded = FlattenGroups(tab.Tree).Where(n => n.Expanded).Select(n => n.AnchorId).ToHashSet(StringComparer.Ordinal);
@@ -371,8 +427,14 @@ public partial class ReportWriterControl
             tab.Tree = result.Tree;
             if (_groupTreeViews.TryGetValue(tab, out var tree)) tree.UpdatePages(tab.Tree);
             tab.IsPaginationComplete = result.IsComplete;
+            if (result.IsComplete) { tab.PageEstimator = null; tab.EstimatedPageCount = null; }
+            else if (tab.PageEstimator is { } estimator)
+                // The next batch prints the refined estimate where the report prints its page count.
+                session.PageCountEstimate = tab.EstimatedPageCount = ObservePages(estimator, session, result);
             tab.RuntimeDiagnostics = tab.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList();
-            SetStatus(tab, result.IsComplete ? $"Report complete: {result.Pages.Count} pages." : $"Ready: {result.Pages.Count} pages available.");
+            SetStatus(tab, result.IsComplete ? $"Report complete: {result.Pages.Count} pages."
+                : tab.EstimatedPageCount is { } about ? $"Ready: {result.Pages.Count} pages available of about {about:N0}. The page count is an estimate until the report completes."
+                : $"Ready: {result.Pages.Count} pages available.");
             OnRenderComplete?.Invoke();
             // The pages stay with the report, but what waited on them (Print, an export) does not act on a report a
             // refresh is replacing.

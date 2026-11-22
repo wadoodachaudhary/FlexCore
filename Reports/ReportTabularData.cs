@@ -58,11 +58,11 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
             var columnGroups = snapshot.Rows.GroupBy(record => record[field]).OrderBy(group => group.Key).ToList();
             if (definition.DescendingFields.Contains(field, StringComparer.OrdinalIgnoreCase)) columnGroups.Reverse();
             var headings = new List<ReportTabularColumn>();
-            var values = new List<string>();
+            var values = new List<string[]>();
             if (grid.RowTotalLabelStyle?.Suppressed != true)
             {
                 headings.Add(new("", definition.RowHeaderWidthTwips, true));
-                values.Add(grid.Appearance!.RowTotalCaption);
+                values.Add([grid.Appearance!.RowTotalCaption]);
             }
             string Summary(IEnumerable<Dictionary<string, object>> records, ReportAnalysisMeasure measure, string format)
             {
@@ -79,8 +79,8 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
             object Share(ReportAnalysisMeasure measure, object value) => measure.PercentOfColumnTotal is null ? value : Percent(value, value);
             // A cell holds one line per summary, each in its own format (sample "Field in Crosstab Text object" counts and sums its orders).
             var columnFormats = grid.ColumnSumFormat.Split(','); var totalFormats = grid.TotalSumFormat.Split(',');
-            string Stack(IEnumerable<Dictionary<string, object>> records, string[] formats) => string.Join("\n", definition.Measures.Select((measure, index) =>
-                Summary(records, measure, index < formats.Length ? formats[index] : formats[^1])));
+            string[] Stack(IEnumerable<Dictionary<string, object>> records, string[] formats) => definition.Measures.Select((measure, index) =>
+                Summary(records, measure, index < formats.Length ? formats[index] : formats[^1])).ToArray();
             foreach (var group in columnGroups)
             {
                 headings.Add(new(Format(group.Key, group.Key is DateTime ? definition.GroupKinds.GetValueOrDefault(field) == 4 ? "M/yyyy" : "d" : ""), definition.ValueColumnWidthTwips));
@@ -91,7 +91,29 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
                 headings.Add(new(grid.Appearance!.ColumnTotalCaption, grid.TotalWidth, false, true));
                 values.Add(Stack(snapshot.Rows, totalFormats));
             }
-            return new(headings, [new(values, true)], 0) { NativeCrossTab = grid };
+            if (grid.Templates.Count > 0)
+            {
+                var summaries = grid.Templates.OrderBy(t => t.Summary).ToArray();
+                if (summaries.Length != definition.Measures.Count || summaries.Where((t, i) => t.Summary != i || t.Axis != 216).Any()
+                    || !grid.SuppressRowGrandTotals || grid.RowTotalLabelStyle?.Suppressed != true)
+                    throw new InvalidDataException("Invalid positioned column summary templates.");
+                var inset = Math.Max(0, summaries[0].Left - grid.PaddingX);
+                if (inset > 0) headings.Insert(0, new("", inset, true));
+                var body = new List<ReportTabularRow>();
+                var styles = new List<IReadOnlyList<ReportNativeCrossTabCellStyle?>>();
+                var heights = new List<int>();
+                for (var i = 0; i < summaries.Length; i++)
+                {
+                    var cell = summaries[i];
+                    var cells = values.Select(stack => cell.Style.Suppressed ? "" : stack[i]).ToList();
+                    if (inset > 0) cells.Insert(0, "");
+                    body.Add(new(cells));
+                    styles.Add(headings.Select(col => col.IsRowHeader ? null : cell.Style).ToArray());
+                    heights.Add(i + 1 < summaries.Length ? summaries[i + 1].Top - cell.Top : cell.Height);
+                }
+                return new(headings, body, inset > 0 ? 1 : 0) { NativeCrossTab = grid, NativeRowHeights = heights, NativeCellStyles = styles };
+            }
+            return new(headings, [new(values.Select(lines => string.Join("\n", lines)).ToArray(), true)], 0) { NativeCrossTab = grid };
         }
         var grouping = new ReportAnalysisGrouping(definition, snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)));
         var rows = grouping.Rows;

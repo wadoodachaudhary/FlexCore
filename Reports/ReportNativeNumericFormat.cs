@@ -12,10 +12,11 @@ public sealed record ReportNativeNumericFormat(
     bool HasConditionalFormatting = false, bool SystemDefaultFormatting = false, bool SuppressIfDuplicate = false,
     string NativeArchive = "", int ValueType = 6)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool WideDatabaseInteger { get; init; }
     internal int SymbolFormulaIndex { get; init; } = -1;
     internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric formatting is not implemented"
         : AccountingFormat ? "accounting numeric layout is not implemented"
-        : OneCurrencySymbolPerPage && CurrencySymbolType != 0 ? "one-currency-symbol-per-page layout is not implemented"
         : SuppressIfNoHorizontalPages ? "horizontal-page numeric suppression is not implemented"
         : DecimalPlaces is < 0 or > 10 || RoundingType is < 0 or > 17 ? "the saved numeric precision is unsupported"
         : NegativeType is < 0 or > 3 ? "the saved negative-number style is unsupported"
@@ -35,7 +36,7 @@ public sealed record ReportNativeNumericFormat(
         if (SystemDefaultFormatting)
         {
             // Crystal SystemFieldProperties takes numeric separators/grouping/sign from the active culture,
-            // currency precision for ordinary fractional numbers, and zero decimals for integer fields.
+            // currency precision for fractional numbers, and the saved precision for wide database integers. Counts and ordinary integers use zero decimals.
             // It retains authored zero suppression, leading-zero, reverse-sign and prefix/suffix preferences.
             var system = CultureInfo.CurrentCulture.NumberFormat;
             if (CurrencySymbolType == 2)
@@ -44,7 +45,7 @@ public sealed record ReportNativeNumericFormat(
                 if (SuppressIfZero && amount == 0) return "";
                 return Prefix + (ReverseSign ? -amount : amount).ToString("C", system) + Suffix;
             }
-            var digits = ValueType is >= 0 and <= 5 ? 0 : system.CurrencyDecimalDigits;
+            var digits = ValueType is >= 0 and <= 5 ? (WideDatabaseInteger ? DecimalPlaces : 0) : system.CurrencyDecimalDigits;
             var authoredRoundingDigits = Math.Max(0, 11 - Math.Max(1, RoundingType));
             var effective = this with { SystemDefaultFormatting = false, DecimalPlaces = digits,
                 RoundingType = authoredRoundingDigits == DecimalPlaces || ValueType is >= 0 and <= 5
@@ -174,7 +175,8 @@ public sealed record ReportNativeNumericFormat(
         new XAttribute("ReverseSign", ReverseSign), new XAttribute("ZeroValue", ZeroValue),
         new XAttribute("SuppressIfNoHorizontalPages", SuppressIfNoHorizontalPages), new XAttribute("Prefix", Prefix), new XAttribute("Suffix", Suffix),
         new XAttribute("HasConditionalFormatting", HasConditionalFormatting), new XAttribute("SystemDefaultFormatting", SystemDefaultFormatting),
-        new XAttribute("SuppressIfDuplicate", SuppressIfDuplicate), new XAttribute("ValueType", ValueType), new XElement("NativeArchive", new XAttribute("Encoding", "base64"), NativeArchive));
+        new XAttribute("SuppressIfDuplicate", SuppressIfDuplicate), new XAttribute("ValueType", ValueType),
+        WideDatabaseInteger ? new XAttribute("WideDatabaseInteger", true) : null, new XElement("NativeArchive", new XAttribute("Encoding", "base64"), NativeArchive));
 
     internal static ReportNativeNumericFormat? Read(XElement parent) => parent.Element("FlexKitNativeNumericFormat") is { } xml
         ? new((bool?)xml.Attribute("SuppressIfZero") ?? false, (int?)xml.Attribute("NegativeType") ?? -1,
@@ -188,5 +190,5 @@ public sealed record ReportNativeNumericFormat(
             (bool?)xml.Attribute("SuppressIfNoHorizontalPages") ?? false, (string?)xml.Attribute("Prefix") ?? "",
             (string?)xml.Attribute("Suffix") ?? "", (bool?)xml.Attribute("HasConditionalFormatting") ?? false,
             (bool?)xml.Attribute("SystemDefaultFormatting") ?? false, (bool?)xml.Attribute("SuppressIfDuplicate") ?? false,
-            xml.Element("NativeArchive")?.Value ?? "", (int?)xml.Attribute("ValueType") ?? 6) : null;
+            xml.Element("NativeArchive")?.Value ?? "", (int?)xml.Attribute("ValueType") ?? 6) { WideDatabaseInteger = (bool?)xml.Attribute("WideDatabaseInteger") ?? false } : null;
 }

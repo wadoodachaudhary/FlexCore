@@ -567,6 +567,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// double-click, though the menu items and the public API still work.</summary>
     [Parameter] public bool AllowColumnAutoFit { get; set; } = true;
 
+    /// <summary>Offer "Insert a column..." in the header right-click menu. On by default; a page sets it
+    /// false to grey the item out and keep the Choose Columns dialog closed for that grid.</summary>
+    [Parameter] public bool AllowColumnInsert { get; set; } = true;
+
     /// <summary>How many rows a best-fit measures, sampled around the scroll
     /// viewport rather than from the top, so one long value far off-screen cannot
     /// stretch the column.</summary>
@@ -13329,7 +13333,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private bool CanInsertHeaderColumn =>
-        CurrentHeaderColumn != null && !IsHeaderColumnGrouped;
+        AllowColumnInsert && CurrentHeaderColumn != null && !IsHeaderColumnGrouped;
 
     private IReadOnlyList<GridColumn> HiddenColumns =>
         EffectiveColumns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();

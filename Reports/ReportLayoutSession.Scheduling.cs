@@ -15,14 +15,73 @@ public sealed partial class ReportLayoutSession
     private readonly Dictionary<(string Element, DataTable Data), List<(SubreportRun Run, ReportLayoutSession Child, int Offset)>> _sharedFurniture = new();
     private readonly Dictionary<string, bool> _statelessSubreports = new(StringComparer.Ordinal);
 
-    private Item ResolveDeferredSubreport(Item item) => item.Child is null
-        && _deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is { } resolved
-        ? item with { Child = resolved.Child, ChildMeasurementOffset = resolved.Offset } : item;
+    // True for a viewer's report whose body subreports are read when their band is first laid out, so that showing a page
+    // runs only that page's queries, as Crystal's preview does. Set only when the pages laid out so far cannot depend on
+    // what follows them (CanLoadSubreportsOnDemand).
+    private bool _subreportsOnDemand;
+
+    /// <summary>True when this report reads its subreports only for the pages laid out.</summary>
+    public bool LoadsSubreportsOnDemand => _subreportsOnDemand;
+
+    private Item ResolveDeferredSubreport(Item item)
+    {
+        if (item.Child is not null || item.Element.Kind != "Subreport") return item;
+        if (_subreportsOnDemand) PrepareDeferredSubreport(item, printContext: false);
+        if (_deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is not { } resolved) return item;
+        // A query the run accepted as failed prints its error in place of the records, as when the band was built with its child.
+        if (_subreportsOnDemand && resolved.Child is null && SubreportErrorHtml(item.Element) is { } failed)
+            return item with { Html = failed, TemplateHtml = failed };
+        return item with { Child = resolved.Child, ChildMeasurementOffset = resolved.Offset };
+    }
 
     // The item prints a subreport's records: built with its section, or once that section printed.
-    private bool HasChild(Item item) => item.Child is not null || _deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is { Child: not null };
+    private bool HasChild(Item item)
+    {
+        if (item.Child is not null) return true;
+        if (_subreportsOnDemand && item.Element.Kind == "Subreport") PrepareDeferredSubreport(item, printContext: false);
+        return _deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is { Child: not null };
+    }
 
-    private bool PrepareDeferredSubreport(Item item)
+    // Reading subreports page by page is safe when each query depends on its record alone and nothing laid out depends on the
+    // pages after it: no subreport in the page furniture or a section that may be dropped as blank, links that read no variable
+    // or page, and no report in the run that reads the page count, sets a variable before printing, or uses a custom function.
+    private bool CanLoadSubreportsOnDemand()
+    {
+        if (_depth != 0 || _executeSubreport is null || _layout.Subreports.Count == 0 || _layout.Columns is not null
+            || _layout.Document.Sections.Any(s => s.UnderlayFollowingSections)) return false;
+        bool RecordLink(string reference, HashSet<string> seen)
+        {
+            var name = reference.Trim();
+            if (!seen.Add(name)) return true;
+            if (!_layout.Formulas.TryGetValue(name, out var formula)) return SpecialName(name) is not ("pagenumber" or "totalpagecount" or "pagenofm");
+            return !formula.UsesPersistentVariables && !formula.UsesPageContext && formula.References.All(r => RecordLink(r, seen));
+        }
+        foreach (var (id, subreport) in _layout.Subreports)
+        {
+            if (_layout.Document.Sections.FirstOrDefault(s => s.Elements.Any(e => e.Id == id)) is not { } section
+                || section.Kind is "PageHeader" or "PageFooter" || section.SuppressIfBlank) return false;
+            if (subreport.Links.Any(link => !RecordLink(link.MainField, new(StringComparer.OrdinalIgnoreCase)))) return false;
+        }
+        var layouts = new HashSet<ReportPositionedLayout>();
+        void Visit(ReportPositionedLayout layout)
+        {
+            if (!layouts.Add(layout)) return;
+            foreach (var child in layout.Subreports.Values) if (child.Definition.PositionedLayout is { } nested) Visit(nested);
+        }
+        Visit(_layout);
+        static bool PageCount(string reference) => SpecialName(reference) is "totalpagecount" or "pagenofm";
+        return layouts.All(layout =>
+        {
+            var formulas = layout.Formulas.Values.Concat(layout.SectionConditions.Values.SelectMany(c => c.Values))
+                .Concat(layout.AreaConditions.Values.SelectMany(c => c.Values)).Concat(layout.ObjectConditions.Values.SelectMany(c => c.Values));
+            if (formulas.Any(f => f.UsesPageContext || f.CustomFunctions.Count > 0 || f.References.Any(PageCount)
+                || f.UsesPersistentVariables && f.EvaluationTime is CrystalEvaluationTime.BeforeReadingRecords or CrystalEvaluationTime.WhileReadingRecords)) return false;
+            return ReferenceEquals(layout, _layout)
+                || !layout.Document.Elements.Any(e => PageCount(e.Binding) || e.Visual.Runs.Any(r => PageCount(r.Binding)));
+        });
+    }
+
+    private bool PrepareDeferredSubreport(Item item, bool printContext = true)
     {
         var key = (item.Element.Id, item.Row);
         if (!_deferredSubreports.TryGetValue(key, out var existing) || existing.HasValue || item.Element.IsSuppressed) return false;
@@ -30,7 +89,7 @@ public sealed partial class ReportLayoutSession
         var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
         try
         {
-            var child = CreateInlineSubreport(item.Element, item.Row, initializePrintContext: true);
+            var child = CreateInlineSubreport(item.Element, item.Row, initializePrintContext: printContext);
             var offset = Measurements.Count;
             if (child is not null)
             {

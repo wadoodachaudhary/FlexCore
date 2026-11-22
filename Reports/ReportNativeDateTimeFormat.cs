@@ -137,7 +137,7 @@ public sealed record ReportNativeTimeComponents(int TimeBase, int AmPmFormat, in
         var text = new StringBuilder();
         if (HourType != 2) text.Append(hour.ToString(HourType == 0 ? "D2" : "D", CultureInfo.InvariantCulture));
         if (MinuteType != 2) text.Append(text.Length > 0 ? HourMinuteSeparator : "").Append(value.Minute.ToString(MinuteType == 0 ? "D2" : "D", CultureInfo.InvariantCulture));
-        if (SecondType != 2) text.Append(text.Length > 0 ? MinuteSecondSeparator : "").Append(value.Second.ToString(SecondType == 0 ? "D2" : "D", CultureInfo.InvariantCulture));
+        if (SecondType != 2) text.Append(text.Length > 0 ? (MinuteType == 2 ? HourMinuteSeparator : MinuteSecondSeparator) : "").Append(value.Second.ToString(SecondType == 0 ? "D2" : "D", CultureInfo.InvariantCulture));
         var amPm = TimeBase == 0 ? value.Hour < 12 ? AmString : PmString : "";
         return AmPmFormat == 0 ? amPm + text : text + amPm;
     }

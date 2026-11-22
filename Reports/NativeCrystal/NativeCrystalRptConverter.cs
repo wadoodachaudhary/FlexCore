@@ -29,6 +29,22 @@ public static partial class NativeCrystalRptConverter
             System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(p[index..]);
     }
 
+    // TIFFGRAPH 9017 has a screen-relative size at byte 8 and print size in hundredths of a point at byte 42.
+    private static double ChartPrintPoints(ReadOnlySpan<byte> drawing, int target)
+    {
+        for (var at = 256; at <= drawing.Length - 4;)
+        {
+            var tag = BinaryPrimitives.ReadUInt16LittleEndian(drawing[at..]);
+            var n = BinaryPrimitives.ReadUInt16LittleEndian(drawing[(at+2)..]);
+            at += 4;
+            if (n > drawing.Length - at) break;
+            var p = drawing.Slice(at,n); at += n;
+            if (tag == 9017 && n >= 44 && BinaryPrimitives.ReadInt16LittleEndian(p) == -1 && BinaryPrimitives.ReadUInt16LittleEndian(p[2..]) == target)
+                return BinaryPrimitives.ReadUInt16LittleEndian(p[42..]) / 100d;
+        }
+        return 0;
+    }
+
     private static string? ReadTitleColor(ReadOnlySpan<byte> drawing)
     {
         if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
@@ -425,6 +441,12 @@ public static partial class NativeCrystalRptConverter
                     && header.AsSpan(268).StartsWith(new byte[] { 0xd2, 7, 16, 0 }) && header.AsSpan(272).StartsWith("HBars\0"u8))
                 {
                     chart.ChartType = Charts.ChartType.HorizontalBar;
+                    if (contents is not null)
+                    {
+                        var drawing = TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes);
+                        chart.HorizontalBarText = new(chart.SavedBarValueTitle, ReadTitleColor(drawing) ?? "#000000",
+                            ChartPrintPoints(drawing, 2015), ChartPrintPoints(drawing, 2022), ChartPrintPoints(drawing, 2018), ReadPlotFrame(drawing));
+                    }
                     if (chart.RightCategoryLegend is not null)
                     {
                         chart.ChartCategoryLegend = false;
@@ -432,7 +454,8 @@ public static partial class NativeCrystalRptConverter
                     }
                 }
             }
-            catch (InvalidDataException) { /* Keep the declared Bar family for unreadable drawing data. */ }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Horizontal chart styling was not imported: {ex.Message}"); }
         }
         // A chart Crystal prints as nothing but its category label (a cheque's VOID stamp) keeps that label as a marker.
         if (charts.Length == 1 && drawings.Length == 1 && contents is not null && charts[0] is { Analysis: null, ChartCategoryField.Length: > 0 } stamp)

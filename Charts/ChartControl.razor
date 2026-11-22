@@ -43,7 +43,7 @@
     }
     else if (PrintedStageImage)
     {
-        var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, EffectiveShowLegend, EffectivePalette, PrintReportGroupChart, XAxis);
+        var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, EffectiveShowLegend, EffectivePalette, PrintReportGroupChart, XAxis, ReportPlot?.HorizontalBarText);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else

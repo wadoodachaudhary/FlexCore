@@ -29,6 +29,9 @@ public class ReportTab
     /// <summary>Rendered HTML pages for this tab.</summary>
     public List<string> Pages { get; set; } = new();
     public bool IsPaginationComplete { get; set; } = true;
+    /// <summary>While the report is laid out in batches: its page estimator, and the page count it estimates.</summary>
+    public ReportPageEstimator? PageEstimator { get; set; }
+    public int? EstimatedPageCount { get; set; }
     public List<ReportPageSnapshot> PageSnapshots { get; set; } = [];
     public ReportTextSearch? Search { get; set; }
     /// <summary>The page of the match the user is on; zero when the search has no current match.</summary>

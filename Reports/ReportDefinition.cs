@@ -76,7 +76,7 @@ public class ReportDefinition
         var copy = (ReportDefinition)MemberwiseClone();
         copy.PositionedSqlSelection = PositionedSqlSelection?.Clone();
         // The request is fitted to the server against these final parameters; a request within the limit is unchanged.
-        var fitted = parameters is null ? template : ReportSqlRequest.Fit(copy, template, parameters);
+        var fitted = parameters is null ? template : ReportSqlRequest.Fit(copy, template, parameters, options?.SendsOnlyReadParameters == true);
         if (!ReferenceEquals(fitted, template))
         {
             if (copy.PositionedTextSelection?.TemplateSql == template) copy.PositionedTextSelection = copy.PositionedTextSelection.WithTemplate(fitted);

@@ -171,7 +171,8 @@ public sealed partial class CrystalFormula
             {
                 "isnull" => Arg(0) is null or DBNull, "hasvalue" => Arg(0) is not (null or DBNull),
                 "onfirstrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == 0, "onlastrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == f.Context.RecordCount - 1,
-                "totext" or "cstr" => ToText(Arg(0), args.Skip(1).Select(n => f.NonNull(n.Get(f))).ToArray(), Arg(0) is DateTime ? KindOf(f, args[0]) : DateKind.Unknown),
+                "totext" or "cstr" => ToText(Arg(0), args.Skip(1).Select(n => f.NonNull(n.Get(f))).ToArray(), KindOf(f, args[0]),
+                    Currency(args[0], name => f.Context.ReferenceType(name)?.BaseType == CrystalBaseType.Currency, 0)),
                 "tonumber" or "cdbl" or "ccur" => Number(Arg(0)), "cint" => decimal.Round(Number(Arg(0)), 0, MidpointRounding.AwayFromZero), "cbool" => Boolean(Arg(0)),
                 "val" => decimal.TryParse(Regex.Match(Str(0).TrimStart(), @"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)).Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var val) ? val : 0m,
                 "isnumber" or "isnumeric" or "numerictext" => decimal.TryParse(Str(0), NumberStyles.Number, CultureInfo.CurrentCulture, out _),
@@ -646,7 +647,7 @@ public sealed partial class CrystalFormula
         }
         return builder.Append('*').ToString();
     }
-    private static string ToText(object? value, object?[] args, DateKind kind = DateKind.Unknown)
+    private static string ToText(object? value, object?[] args, DateKind kind = DateKind.Unknown, bool currency = false)
     {
         if (value is string text) return text;
         if (value is object?[] or CrystalRange) throw new InvalidDataException("A single value is required here, not an array or a range.");
@@ -672,7 +673,9 @@ public sealed partial class CrystalFormula
         // An empty decimal separator (CStr (x, 0, "", "")) joins the digits; .NET rejects it, so a placeholder is removed afterwards.
         var separator = args.Length > 2 ? Text(args[2]) : null;
         if (separator is not null) culture.NumberFormat.NumberDecimalSeparator = separator.Length > 0 ? separator : "\uFFFF";
-        var formatted = Number(value).ToString("N" + digits, culture);
+        if (currency && args.Length > 1) culture.NumberFormat.CurrencyGroupSeparator = culture.NumberFormat.NumberGroupSeparator;
+        if (currency && separator is not null) culture.NumberFormat.CurrencyDecimalSeparator = culture.NumberFormat.NumberDecimalSeparator;
+        var formatted = Number(value).ToString((currency ? "C" : "N") + digits, culture);
         return separator is "" ? formatted.Replace("\uFFFF", "", StringComparison.Ordinal) : formatted;
     }
     private static IEnumerable<CrystalRange> Ranges(object? value, string function) =>

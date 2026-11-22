@@ -35,7 +35,7 @@ internal static class ReportSqlRequest
 {
     private static readonly Regex Reference = new(@"@([\p{L}\p{N}_#$]+)", RegexOptions.CultureInvariant);
 
-    internal static string Fit(ReportDefinition copy, string sql, IDictionary<string, object> parameters)
+    internal static string Fit(ReportDefinition copy, string sql, IDictionary<string, object> parameters, bool sendsOnlyRead = false)
     {
         var tree = copy.TreeSql ?? "";
         HashSet<string>? referenced = null;
@@ -50,26 +50,30 @@ internal static class ReportSqlRequest
                     parameters[list.Member(index)] = list.Typed is { } typed ? typed[index] ?? DBNull.Value : MultiValueParameterRewriter.TypedValue(list.Values[index], list.Type);
                     keys.Add(list.Member(index));
                 }
-        if (Count(copy, parameters) <= ReportSqlSelectionPlan.MaxRequestParameters) return sql;
+        int Sent() => Count(copy, parameters, sendsOnlyRead ? sql + "\n" + tree : null);
+        if (Sent() <= ReportSqlSelectionPlan.MaxRequestParameters) return sql;
 
         foreach (var name in DerivedNames(copy, parameters).Where(name => !Referenced().Contains(name)).ToArray())
             Remove(parameters, name);
         foreach (var list in copy.SqlLists.Where(list => list.Values.Length > 1).OrderByDescending(list => list.Values.Length).ThenBy(list => list.Name, StringComparer.Ordinal).ToArray())
         {
-            if (Count(copy, parameters) <= ReportSqlSelectionPlan.MaxRequestParameters) break;
+            if (Sent() <= ReportSqlSelectionPlan.MaxRequestParameters) break;
             Pack(copy, list, ref sql, ref tree, parameters);
         }
         if (copy.TreeSql is { Length: > 0 }) copy.TreeSql = tree;
         return sql;
     }
 
-    /// <summary>The parameters the request sends: the caller's and the selection's reserved names it adds when validated.</summary>
-    internal static int Count(ReportDefinition definition, IDictionary<string, object> parameters)
+    /// <summary>The parameters the request sends: the caller's, or only those <paramref name="readBy"/> names when given, and the
+    /// selection's reserved names it adds when validated.</summary>
+    internal static int Count(ReportDefinition definition, IDictionary<string, object> parameters, string? readBy = null)
     {
+        var read = readBy is null ? null : ReportSqlParameters.Names(readBy);
+        var sent = read is null ? parameters.Count : parameters.Keys.Count(key => read.Contains(key.TrimStart('@')));
         var generated = definition.PositionedSqlSelection?.GeneratedNames().ToArray() ?? [];
-        if (generated.Length == 0) return parameters.Count;
+        if (generated.Length == 0) return sent;
         var keys = new HashSet<string>(parameters.Keys, StringComparer.OrdinalIgnoreCase);
-        return parameters.Count + generated.Distinct(StringComparer.OrdinalIgnoreCase).Count(name => !keys.Contains(name));
+        return sent + generated.Distinct(StringComparer.OrdinalIgnoreCase).Count(name => !keys.Contains(name) && (read is null || read.Contains(name)));
     }
 
     internal static HashSet<string> References(string sql)

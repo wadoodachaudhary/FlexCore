@@ -5,8 +5,21 @@ using System.Xml.Linq;
 
 namespace Fx.ControlKit.Reports;
 
+/// <summary>Native paragraph margins and first-line offset are signed twips. A negative first offset is a hanging indent.</summary>
+public sealed record ReportParagraphFormat(int Left, int Right, int First, string Alignment)
+{
+    internal XElement ToXml() => new("Paragraph", new XAttribute("Left", Left), new XAttribute("Right", Right),
+        new XAttribute("First", First), new XAttribute("Alignment", Alignment));
+    internal static ReportParagraphFormat? Read(XElement? p) => p == null ? null
+        : new((int?)p.Attribute("Left") ?? 0, (int?)p.Attribute("Right") ?? 0, (int?)p.Attribute("First") ?? 0, (string?)p.Attribute("Alignment") ?? "Default");
+    internal string CssAlignment(string fallback) => (Alignment == "Default" ? fallback : Alignment).ToLowerInvariant() switch
+        { "right" or "decimal" => "right", "horizontalcenter" or "center" => "center", "justified" => "justify", _ => "left" };
+}
+
 public sealed class ReportTextRun
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ReportParagraphFormat? Paragraph { get; set; }
     public string Text { get; set; } = "";
     public string Binding { get; set; } = "";
     /// <summary>A positive Crystal character spacing sets the advance between glyph origins in twips.</summary>
@@ -50,6 +63,10 @@ public sealed class ReportObjectVisual
     internal const double DropShadowPoints = 3;
     /// <summary>Native stroke width in twips; zero is a hairline, null preserves legacy renderer defaults.</summary>
     public int? LineWidthTwips { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int CornerEllipseWidth { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int CornerEllipseHeight { get; set; }
     public bool CloseAtPageBreak { get; set; } = true;
     public ReportObjectVisual Clone()
     {
@@ -59,6 +76,7 @@ public sealed class ReportObjectVisual
         {
             ImageDataUrl = ImageDataUrl, VectorImage = VectorImage?.Clone(), ImageFit = ImageFit, Runs = runs,
             BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine,
+            CornerEllipseWidth = CornerEllipseWidth, CornerEllipseHeight = CornerEllipseHeight,
             CloseAtPageBreak = CloseAtPageBreak, LineWidthTwips = LineWidthTwips, HasDropShadow = HasDropShadow, TightHorizontal = TightHorizontal
         };
     }
@@ -113,7 +131,8 @@ public sealed class ReportObjectVisual
             RightLine = (string?)border?.Attribute("RightLineStyle") ?? "NoLine",
             TightHorizontal = (bool?)border?.Attribute("EnableTightHorizontal") ?? false,
             HasDropShadow = (bool?)border?.Attribute("HasDropShadow") ?? false,
-            LineWidthTwips = lineWidth,
+            LineWidthTwips = lineWidth, CornerEllipseWidth = (int?)border?.Attribute("CornerEllipseWidth") ?? 0,
+            CornerEllipseHeight = (int?)border?.Attribute("CornerEllipseHeight") ?? 0,
             CloseAtPageBreak = (bool?)element.Element("ObjectFormat")?.Attribute("EnableCloseAtPageBreak") ?? true,
             BorderColor = color is null ? "#000000" : $"#{Channel("R"):x2}{Channel("G"):x2}{Channel("B"):x2}"
         };
@@ -123,6 +142,7 @@ public sealed class ReportObjectVisual
             FontFamily = (string?)run.Attribute("Font") ?? "Arial", FontSize = (decimal?)run.Attribute("Size") ?? 10,
             Bold = (bool?)run.Attribute("Bold") ?? false, Italic = (bool?)run.Attribute("Italic") ?? false,
             Underline = (bool?)run.Attribute("Underline") ?? false, Color = (string?)run.Attribute("Color") ?? "#000000",
+            Paragraph = ReportParagraphFormat.Read(run.Element("Paragraph")),
             CharacterSpacingTwips = (int?)run.Attribute("CharacterSpacingTwips") ?? 0,
             NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(run),
             FontConditionFormulas = run.Element("FontColorConditionFormulas")?.Attributes()
@@ -171,7 +191,7 @@ public sealed class ReportObjectVisual
                     new XAttribute("Bold", run.Bold), new XAttribute("Italic", run.Italic),
                     new XAttribute("Underline", run.Underline), new XAttribute("Color", run.Color),
                     run.CharacterSpacingTwips > 0 ? new XAttribute("CharacterSpacingTwips", run.CharacterSpacingTwips) : null, run.Text,
-                    run.NativeDateTimeFormat?.ToXml(),
+                    run.Paragraph?.ToXml(), run.NativeDateTimeFormat?.ToXml(),
                     run.FontConditionFormulas.Count == 0 ? null : new XElement("FontColorConditionFormulas",
                         run.FontConditionFormulas.Select(c => new XAttribute(c.Key, c.Value)))))));
         var border = element.Element("Border");
@@ -183,6 +203,8 @@ public sealed class ReportObjectVisual
         border.SetAttributeValue("HasDropShadow", visual.HasDropShadow);
         border.SetAttributeValue("EnableTightHorizontal", visual.TightHorizontal ? true : (bool?)null);
         border.SetAttributeValue("LineWidth", visual.LineWidthTwips);
+        border.SetAttributeValue("CornerEllipseWidth", visual.CornerEllipseWidth > 0 ? visual.CornerEllipseWidth : null);
+        border.SetAttributeValue("CornerEllipseHeight", visual.CornerEllipseHeight > 0 ? visual.CornerEllipseHeight : null);
         if (element.Name.LocalName == "LineObject") element.SetAttributeValue("LineThickness", visual.LineWidthTwips);
         var color = ReportObjectRenderer.Color(visual.BorderColor, "#000000");
         border.Element("BorderColor")?.Remove();
@@ -243,6 +265,10 @@ public static class ReportObjectRenderer
     // Crystal treats a fixed text object without room for a printer line the same way, embedded
     // fields included ("Item Notes: {Notes}" prints its first line to the glyph that
     // reaches the edge, not the words that fit before it).
+    internal static bool IsRightFixedString(ReportDesignerElement e) => e.UseCrystalScreenMetrics && e.Kind == "Field" && !e.CanGrow
+        && e.HorizontalAlignment.Equals("Right", StringComparison.OrdinalIgnoreCase) && !e.HasRotatedText && !WrapText(e)
+        && e.NativeDateTimeFormat == null && e.NativeNumberFormat == null && e.NativeNumericFormat == null;
+
     internal static bool WrapText(ReportDesignerElement item) => !(item.Kind == "Field"
         && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null
             || !item.CanGrow && (item.NativeDateTimeFormat is not null || FixedLineCount(item) == 1))
@@ -274,6 +300,13 @@ public static class ReportObjectRenderer
 
     internal static bool ClipNativeLongWords(ReportDesignerElement item) => item.UseCrystalScreenMetrics
         && item.Kind == "Field" && !item.CanGrow && WrapText(item);
+
+    private static string CornerStyle(ReportObjectVisual v)
+    {
+        var rx = Number(v.CornerEllipseWidth / 40d) + "pt"; var ry = Number(v.CornerEllipseHeight / 40d) + "pt";
+        var top = v.TopLine != "NoLine"; var bottom = v.BottomLine != "NoLine";
+        return $"border-radius:{(top ? rx : "0")} {(top ? rx : "0")} {(bottom ? rx : "0")} {(bottom ? rx : "0")} / {(top ? ry : "0")} {(top ? ry : "0")} {(bottom ? ry : "0")} {(bottom ? ry : "0")};";
+    }
 
     public static string Encode(string? value) => WebUtility.HtmlEncode(value ?? "");
     public static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
@@ -317,7 +350,9 @@ public static class ReportObjectRenderer
         return bounds + geometry + clip + writingMode + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" || ClipNativeLongWords(textFrame) ? "normal" : "anywhere")};line-height:{lineHeight};letter-spacing:0;text-align:{align};{(item.HasRotatedText ? "padding-inline-start" : "padding-left")}:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
             FontStyle(item.FontFamily, item.FontSize, item.Bold, item.Italic, item.Underline, item.TextColor, item.UseCrystalScreenMetrics, TextDpi(item)) +
             NativeUnderline(item) +
-            (item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual)) +
+            (NativeTextFrame(item) ? $"outline:{Border(item.Visual.TopLine, item.Visual.BorderColor, item.Visual.LineWidthTwips)};outline-offset:1pt;"
+                : item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual)) +
+            (item.Kind == "Box" && item.Visual.CornerEllipseWidth > 0 && item.Visual.CornerEllipseHeight > 0 ? CornerStyle(item.Visual) : "") +
             (item.Kind != "Line" && item.Visual.HasDropShadow ? $"box-shadow:{Number(ReportObjectVisual.DropShadowPoints * 4 / 3)}px {Number(ReportObjectVisual.DropShadowPoints * 4 / 3)}px 0 #000000;" : "");
     }
 
@@ -396,6 +431,10 @@ public static class ReportObjectRenderer
 
     // Paint native numeric borders outside the authored text box without
     // shrinking its text area or changing its clipping and alignment.
+    // A complete native text frame is outside the content rectangle, with a one-point clear gutter.
+    internal static bool NativeTextFrame(ReportDesignerElement item) => item.UseCrystalScreenMetrics && item.Kind == "Text"
+        && !item.CanGrow && !item.HasRotatedText && item.Visual is { LeftLine: "Single", RightLine: "Single", TopLine: "Single", BottomLine: "Single" };
+
     private static bool NativeNumericOutsideBorder(ReportDesignerElement item) => item.Kind == "Field" && !item.CanGrow
         && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null)
         && new[] { item.Visual.TopLine, item.Visual.BottomLine, item.Visual.LeftLine, item.Visual.RightLine }
@@ -483,7 +522,10 @@ public static class ReportObjectRenderer
                     ? Math.Min(pixels / 2, Math.Max(0, item.TopTwips / 15d)) : pixels / 2;
                 center = $" translateY(-{Number(inset)}px)";
             }
-            return $"<span style=\"display:block;position:absolute;transform-origin:0 0;width:{Number(Math.Sqrt((double)item.WidthTwips * item.WidthTwips + (double)item.HeightTwips * item.HeightTwips) / 15)}px;transform:rotate({Number(Math.Atan2(item.HeightTwips, item.WidthTwips))}rad){center};border-top:{border}\"></span>";
+            var stroke = item.Visual.LineWidthTwips == 0 && lineStyle is "Dot" or "DotLine"
+                ? $"height:1px;background:repeating-linear-gradient(to right,{Color(item.Visual.BorderColor, "#000000")} 0 1pt,transparent 1pt 4pt)"
+                : $"border-top:{border}";
+            return $"<span style=\"display:block;position:absolute;transform-origin:0 0;width:{Number(Math.Sqrt((double)item.WidthTwips * item.WidthTwips + (double)item.HeightTwips * item.HeightTwips) / 15)}px;transform:rotate({Number(Math.Atan2(item.HeightTwips, item.WidthTwips))}rad){center};{stroke}\"></span>";
         }
         if (item.Kind == "Map") return design ? Encode(item.Name) : "";
         if (item.Kind == "Box") return "";
@@ -495,10 +537,42 @@ public static class ReportObjectRenderer
             // Embedded data keeps its line endings. A following literal (even a space) belongs on
             // the next line when the field ends in a newline, and contributes to CanGrow height.
             var resolved = item.Visual.Runs.Select(run => (Run: run, Value: string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolveRun(run) ?? "")).ToArray();
-            if (item.SuppressEmbeddedFieldBlankLines)
+            if (resolved.Length > 0 && resolved[0].Run.Paragraph != null)
             {
+                var blocks = new StringBuilder();
+                for (var start = 0; start < resolved.Length;)
+                {
+                    var next = start + 1;
+                    while (next < resolved.Length && resolved[next].Run.Paragraph == null) next++;
+                    // A synthetic newline run separates paragraphs in the plain-text representation.
+                    var end = next < resolved.Length ? next - 1 : next;
+                    var parts = resolved[start..end];
+                    html.Clear();
+                    var format = resolved[start].Run.Paragraph!;
+                    var tabs = parts.Length == 0 ? 0 : parts[0].Value.TakeWhile(c => c == '\t').Count();
+                    if (tabs != 0) parts[0].Value = parts[0].Value[tabs..];
+                    if (AppendValues(parts, next == resolved.Length))
+                    {
+                        var pitch = parts.Select(p => ReportFontCatalog.NativeLineHeightPixels(p.Run.FontFamily, p.Run.FontSize,
+                            item.UseCrystalScreenMetrics, p.Run.Bold, p.Run.Italic, TextDpi(item))).Max();
+                        blocks.Append(CrystalDeviceText.Paragraph(item, html.ToString(), format, tabs, pitch));
+                    }
+                    start = next;
+                }
+                return blocks.ToString();
+            }
+            AppendValues(resolved, true);
+            return DecorateNativeField(item, html.ToString());
+
+            bool AppendValues((ReportTextRun Run, string Value)[] values, bool finalParagraph)
+            {
+                if (!item.SuppressEmbeddedFieldBlankLines)
+                {
+                    foreach (var part in values) Append(part.Run, part.Value);
+                    return true;
+                }
                 var lines = new List<List<(ReportTextRun Run, string Value)>> { new() };
-                foreach (var value in resolved)
+                foreach (var value in values)
                 {
                     var parts = value.Value.ReplaceLineEndings("\n").Split('\n');
                     for (var index = 0; index < parts.Length; index++)
@@ -507,16 +581,15 @@ public static class ReportObjectRenderer
                         lines[^1].Add((value.Run, parts[index]));
                     }
                 }
-                var visible = lines.Where((line, index) => index == lines.Count - 1 || !line.Any(part => part.Run.Binding.Length > 0)
+                var visible = lines.Where((line, index) => finalParagraph && index == lines.Count - 1 || !line.Any(part => part.Run.Binding.Length > 0)
                     || line.Any(part => part.Run.Binding.Length > 0 && !string.IsNullOrWhiteSpace(part.Value))).ToArray();
                 for (var index = 0; index < visible.Length; index++)
                 {
                     if (index > 0) html.Append("\n");
                     foreach (var part in visible[index]) Append(part.Run, part.Value);
                 }
+                return visible.Length > 0;
             }
-            else foreach (var value in resolved) Append(value.Run, value.Value);
-            return DecorateNativeField(item, html.ToString());
 
             void Append(ReportTextRun run, string value)
             {

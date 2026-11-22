@@ -251,6 +251,22 @@ public sealed partial class ReportLayoutSession
         _state.PageTokens[token] = (order - PageTextOrder, true, (page, count, repeated) => markup(value(page, count, repeated)));
         return token;
     }
+    // Table fragments carry plain cell text, independently of the band's HTML. Resolve a caption
+    // at its final logical page (including resets and repeated headers), never on the cached grid.
+    private ReportTableFragment? ResolveTablePageValues(ReportTableFragment? table, int page, int count, bool repeated)
+    {
+        if (table is null || _state.PageTokens.Count == 0) return table;
+        string Value(string text) => text.Contains(PageTokenSuffix, StringComparison.Ordinal)
+            ? ResolvePageText(text, page, count, repeated, plainText: true) : text;
+        return table with
+        {
+            Cells = table.Cells.Select(Value).ToArray(),
+            Columns = table.Columns.Select(c => c with { Caption = Value(c.Caption) }).ToArray(),
+            LayoutCells = table.LayoutCells?.Select(c => c with { Text = Value(c.Text),
+                Nested = ResolveTablePageValues(c.Nested, page, count, repeated) }).ToArray()
+        };
+    }
+
     // A deferred token is 32 hexadecimal digits and this suffix; no token contains or overlaps another.
     private const string PageTokenSuffix = "-formula";
     private const int PageTokenDigits = 32;
@@ -260,6 +276,9 @@ public sealed partial class ReportLayoutSession
     // text a token resolves to is searched only for tokens later in that order, as replacing every registered token in
     // turn would leave it.
     private string ResolvePageValues(string html, int page, int count, bool repeated = false)
+        => ResolvePageText(html, page, count, repeated, plainText: false);
+
+    private string ResolvePageText(string html, int page, int count, bool repeated, bool plainText)
     {
         if (_state.PageTokens.Count == 0) return html;
         SortedDictionary<long, string>? pending = null;
@@ -270,7 +289,7 @@ public sealed partial class ReportLayoutSession
             pending.Remove(token.Key);
             var entry = _state.PageTokens[token.Value];
             var value = entry.Value(page, count, repeated);
-            if (!entry.Markup) value = ReportObjectRenderer.Encode(value);
+            if (!entry.Markup && !plainText) value = ReportObjectRenderer.Encode(value);
             html = html.Replace(token.Value, value, StringComparison.Ordinal);
             FindPageTokens(value, token.Key, ref pending);
         }

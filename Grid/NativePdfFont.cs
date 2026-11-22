@@ -35,6 +35,12 @@ internal sealed class NativePdfFont
         }
         var normalized = (family ?? "").Trim().Trim('\'', '"').ToLowerInvariant();
         if (normalized == "tahoma") return InstalledTahoma(bold, italic);
+        if (normalized == "verdana")
+        {
+            var path = InstalledStandardFace("Verdana", bold, italic)
+                ?? throw new NotSupportedException("Native PDF requires the installed Verdana face. No substitute was used.");
+            return LoadInstalled(path);
+        }
         var font = normalized switch
         {
             "arial" or "helvetica" or "ms shell dlg" or "liberation sans" or "liberationsans" or "sans-serif" => "LiberationSans",
@@ -57,6 +63,7 @@ internal sealed class NativePdfFont
     {
         var face = family.Trim().ToLowerInvariant() switch
         {
+            "verdana" => (Mac: "Verdana", Windows: "verdana"),
             "arial" => (Mac: "Arial", Windows: "arial"),
             "times new roman" => (Mac: "Times New Roman", Windows: "times"),
             "courier new" => (Mac: "Courier New", Windows: "cour"),
@@ -65,6 +72,7 @@ internal sealed class NativePdfFont
         if (face.Mac.Length == 0) return null;
         var name = OperatingSystem.IsMacOS()
             ? face.Mac + (bold ? italic ? " Bold Italic" : " Bold" : italic ? " Italic" : "") + ".ttf"
+            : face.Windows == "verdana" ? "verdana" + (bold ? italic ? "z" : "b" : italic ? "i" : "") + ".ttf"
             : face.Windows + (bold ? italic ? "bi" : "bd" : italic ? "i" : "") + ".ttf";
         var roots = OperatingSystem.IsWindows()
             ? new[] { Environment.GetFolderPath(Environment.SpecialFolder.Fonts), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "Windows", "Fonts") }
@@ -124,14 +132,17 @@ internal sealed class NativePdfFont
                 : new[] { "/usr/share/fonts/truetype/msttcorefonts", "/usr/local/share/fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/share/fonts") };
         var path = roots.Where(root => !string.IsNullOrWhiteSpace(root)).Select(root => Path.Combine(root, OperatingSystem.IsMacOS() ? mac : windows)).FirstOrDefault(File.Exists);
         if (path is null) throw new NotSupportedException($"Native PDF requires an installed, licensed Tahoma{(bold ? " Bold" : "")} TrueType font. No substitute was used.");
-        return Fonts.GetOrAdd(path, static key => new Lazy<NativePdfFont>(() =>
+        return LoadInstalled(path);
+    }
+
+    private static NativePdfFont LoadInstalled(string path) =>
+        Fonts.GetOrAdd(path, static key => new Lazy<NativePdfFont>(() =>
         {
             using var stream = File.OpenRead(key);
             if (stream.Length is < 12 or > 8 * 1024 * 1024) throw InvalidFont();
             using var bytes = new MemoryStream(); stream.CopyTo(bytes);
             return new NativePdfFont(Path.GetFileName(key), bytes.ToArray());
         })).Value;
-    }
 
     private NativePdfFont(string file, byte[] bytes)
     {

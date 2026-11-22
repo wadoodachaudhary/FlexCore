@@ -78,4 +78,11 @@ public class ReportOptions
     /// </para>
     /// </summary>
     public Func<Exception, bool>? TolerateSubreportQueryError { get; set; }
+
+    /// <summary>
+    /// How the viewer uses the page estimator: every report lays out its first pages; one then estimated long, or
+    /// with many records, goes on in batches and shows the estimate until its last page is laid out. On by default;
+    /// <c>Enabled = false</c> restores the viewer's behaviour without it.
+    /// </summary>
+    public ReportPageEstimateOptions PageEstimate { get; set; } = ReportPageEstimateOptions.Default;
 }

@@ -75,7 +75,9 @@ internal static partial class CrystalReportContentsParser
                     definition.ParseWarnings.Add($"{obj.Name}: native numeric properties are incomplete.");
                 else
                 {
-                    obj.NativeNumericFormat = obj.NativeNumericCandidates[index] with { ValueType = type };
+                    obj.NativeNumericFormat = obj.NativeNumericCandidates[index] with { ValueType = type,
+                        WideDatabaseInteger = type == 4 && obj.NativeNumericCandidates[index] is { SystemDefaultFormatting: true, DecimalPlaces: > 0 } && database.Tables.SelectMany(t => t.Fields).Any(f =>
+                            f.Length == 8 && f.FormulaName.Equals(reference, StringComparison.OrdinalIgnoreCase)) };
                     if (obj.NativeNumericFormat.UnsupportedReason is { } reason)
                         definition.ParseWarnings.Add($"{obj.Name}: native numeric format retained but {reason}.");
                 }

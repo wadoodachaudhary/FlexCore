@@ -65,7 +65,15 @@ public sealed record ReportSqlExecutionOptions(bool CaseInsensitiveTextColumns)
     /// Null: every column of a table or view does when <see cref="CaseInsensitiveTextColumns"/> is true.</summary>
     public Func<ReportTextColumn, bool>? CaseInsensitiveColumn { get; init; }
 
+    /// <summary>The query is sent with only the parameters its SQL names (<see cref="ReportSqlParameters"/>); a structured
+    /// executor receives them all.</summary>
+    public bool SendsOnlyReadParameters { get; init; }
+
     /// <summary>The options a data executor declares.</summary>
     public static ReportSqlExecutionOptions For(IReportDataExecutor executor) =>
-        new(executor.TextColumnsCompareCaseInsensitively) { CaseInsensitiveColumn = executor.TextColumnComparesCaseInsensitively };
+        new(executor.TextColumnsCompareCaseInsensitively)
+        {
+            CaseInsensitiveColumn = executor.TextColumnComparesCaseInsensitively,
+            SendsOnlyReadParameters = executor is not IReportDefinitionDataExecutor
+        };
 }

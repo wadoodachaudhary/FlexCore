@@ -67,10 +67,16 @@
         if (Fragment.Row == -2) lineCount = Math.Max(1, Fragment.LayoutCells?.FirstOrDefault(c => c.Column == index)?.Text.Split('\n').Length ?? 1);
         var style = Fragment.CellStyles?.ElementAtOrDefault(index) ?? native.StyleFor(Fragment.IsHeader, rowHeader, Fragment.IsTotal, Fragment.Columns[index].IsGrandTotal);
         var nativeLeading = native.Templates.Count > 0 && (native.ParentHeaderHeight == 0 || native.SummaryHeaderHeight > 0) && style is not null
-            ? "vertical-align:top;line-height:" + ReportObjectRenderer.Number(ReportNativeCrossTabText.LineHeight(style)) + "pt;" : "";
+            ? "vertical-align:top;line-height:" + HtmlLineHeight(style) + ";" : "";
         return NativeCellStyle(index) + (style?.Css ?? $"font-weight:{(!Fragment.IsHeader && !rowHeader && native.ValueBold ? "bold" : "normal")};text-align:{(!Fragment.IsHeader && !rowHeader ? "right" : "left")};")
             + (Fragment.IsHeader && rowHeader ? "background:transparent;" : "")
             + $"line-height:{Px(Math.Max(1, (Fragment.HeightTwips - 2 * native.PaddingY) / lineCount - 15))}px;padding:{Px(native.PaddingY)}px {Px(native.PaddingX)}px;" + nativeLeading + (style?.TextInsetTwips is > 0 ? $"padding-left:{Px(native.PaddingX + style.TextInsetTwips)}px;" : "");
+    }
+    // HTML can render an installed browser face even when native PDF cannot embed it.
+    private static string HtmlLineHeight(ReportNativeCrossTabCellStyle style)
+    {
+        try { return ReportObjectRenderer.Number(ReportNativeCrossTabText.LineHeight(style)) + "pt"; }
+        catch (NotSupportedException) { return "normal"; }
     }
     private string NativeCellStyle(int index)
     {
