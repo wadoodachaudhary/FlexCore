@@ -1,0 +1,64 @@
+@namespace Fx.ControlKit.WorkTracking
+
+<section class="fx-work-board" aria-label="Project work board">
+    <div class="fx-work-board-toolbar">
+        <ButtonControl OnClick="@(() => _kanban = false)">Hierarchy</ButtonControl>
+        <ButtonControl OnClick="@(() => _kanban = true)">Task board</ButtonControl>
+        <TextBoxControl @bind-Value="_search" UpdateOnInput="true" Placeholder="Search ticket key or title" Width="260px" />
+        @foreach (var kind in Enum.GetValues<WorkItemKind>())
+        {
+            <span>@Items.Count(i => i.Kind == kind) @kind</span>
+        }
+    </div>
+    @if (_kanban)
+    {
+        <KanbanBoardControl TItem="WorkItem" Items="@Items.Where(i => i.Kind == WorkItemKind.Task && Matches(i))"
+                            Columns="@Columns" ColumnKeySelector="@(i => i.State.ToString())" OnCardClick="OnSelect">
+            <CardTemplate Context="ticket">
+                <strong>@ticket.Key · @ticket.Title</strong>
+                <p>@(ticket.Assignee.Length == 0 ? "Unassigned · " + ticket.SuggestedRole : ticket.Assignee)</p>
+                <small>@ticket.DependsOn.Length dependencies · @ticket.Attempts attempts</small>
+            </CardTemplate>
+        </KanbanBoardControl>
+    }
+    else
+    {
+        <div class="fx-work-board-outline" role="list">
+            @foreach (var ticket in VisibleItems)
+            {
+                <div role="listitem" class="fx-work-board-row" style="padding-left: @((int)ticket.Kind * 20)px">
+                    <span class="fx-work-board-kind">@ticket.Kind</span>
+                    @if (ticket.Kind != WorkItemKind.Task && string.IsNullOrWhiteSpace(_search))
+                    {
+                        <ButtonControl OnClick="@(() => Toggle(ticket.Key))">@(_expanded.Contains(ticket.Key) ? "Collapse" : "Expand")</ButtonControl>
+                    }
+                    <ButtonControl OnClick="@(() => OnSelect.InvokeAsync(ticket))">@ticket.Key · @ticket.Title</ButtonControl>
+                    <span>@ticket.State</span>
+                    @if (ticket.Assignee.Length > 0) { <small>@ticket.Assignee</small> }
+                </div>
+            }
+        </div>
+    }
+    @if (Items.Count == 0) { <p>No planned tickets yet. Analyze a project to create its backlog.</p> }
+</section>
+
+@code {
+    [Parameter] public IReadOnlyList<WorkItem> Items { get; set; } = [];
+    [Parameter] public EventCallback<WorkItem> OnSelect { get; set; }
+    private bool _kanban;
+    private string _search = "";
+    private readonly HashSet<string> _expanded = [];
+    private IEnumerable<WorkItem> VisibleItems => string.IsNullOrWhiteSpace(_search) ? Outline(null) : Items.Where(Matches);
+    private bool Matches(WorkItem item) => string.IsNullOrWhiteSpace(_search) || (item.Key + " " + item.Title).Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase);
+    private void Toggle(string key) { if (!_expanded.Add(key)) _expanded.Remove(key); }
+    private static readonly IReadOnlyList<KanbanColumn> Columns = Enum.GetValues<WorkItemState>()
+        .Select(s => new KanbanColumn { Key = s.ToString(), Title = s.ToString() }).ToArray();
+    private IEnumerable<WorkItem> Outline(string? parent)
+    {
+        foreach (var item in Items.Where(i => i.ParentKey == parent))
+        {
+            yield return item;
+            if (_expanded.Contains(item.Key)) foreach (var child in Outline(item.Key)) yield return child;
+        }
+    }
+}
