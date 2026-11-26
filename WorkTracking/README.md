@@ -7,3 +7,9 @@ Construct the store with `LocalWorkBoardOptions(privateDirectory)` and register 
 SQLite is authoritative. `ExportAsync` regenerates project and individual ticket JSON files after an interrupted or failed projection. Projection failures are reported, not hidden; a database mutation may already have committed when such an error is returned. Consumers must read the current board before retrying a mutation. The activity journal is available through `EventsAsync`.
 
 The store is not an authentication boundary and does not execute code or verify evidence. A trusted local CLI can use operator names; a hosted application must authenticate actors and authorize access to each project before invoking these methods. Keep the storage root out of public static-file directories. Host-level source checks and worker limits are also required before executing migration work.
+
+## Planning and sprints
+
+Optional `WorkPlanningDraft` checkpoints retain intake, source baseline, reviewed plan, selected model and an optimistic revision. Creating a board from one rechecks that revision and approval in the database transaction. Sprint membership and dependency order are validated; the board control can filter by sprint. Existing boards without these fields remain compatible.
+
+Model assignments can target one task or unstarted descendant tasks. Hosts can claim a specific task and release a failed/cancelled run. `SubmitProposalAsync` records a proposal awaiting review, not verified work; `ReviewAsync` refuses to mark a proposal Done. The host must separately apply and verify implementation before normal result submission. Model calls, authentication, file access and execution are host responsibilities. No provider credentials belong in these records.

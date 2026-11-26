@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 namespace Fx.ControlKit.WorkTracking;
 
 /// <summary>SQLite is authoritative. JSON folders are recoverable, atomic projections of each committed board.</summary>
-public sealed class LocalWorkBoardStore
+public sealed partial class LocalWorkBoardStore
 {
     public static JsonSerializerOptions Json { get; } = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -30,6 +30,7 @@ public sealed class LocalWorkBoardStore
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS work_planning_drafts(project_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_projects(id TEXT PRIMARY KEY, project_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
                 item_key TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, at_utc TEXT NOT NULL);
@@ -96,10 +97,12 @@ public sealed class LocalWorkBoardStore
         {
             if (item.Kind != WorkItemKind.Task || item.State is WorkItemState.InProgress or WorkItemState.Review or WorkItemState.Done)
                 throw new InvalidOperationException("Only unstarted tasks can be assigned.");
-            return item with { Assignee = agent.Trim() };
+            return item with { Assignee = agent.Trim(), Agent = item.Agent?.Id == agent.Trim() ? item.Agent : null };
         }), ct);
 
-    public async Task<WorkClaim?> ClaimNextAsync(string project, string agent, CancellationToken ct = default)
+    public Task<WorkClaim?> ClaimNextAsync(string project, string agent, CancellationToken ct = default) => ClaimAsync(project, agent, null, ct);
+
+    public async Task<WorkClaim?> ClaimAsync(string project, string agent, string? ticketKey, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
         WorkClaim? claim = null;
@@ -111,7 +114,7 @@ public sealed class LocalWorkBoardStore
             var items = board.Items.Select(i => i.State == WorkItemState.InProgress && i.LeaseExpiresUtc <= now
                 ? i with { State = WorkItemState.Ready, LeaseToken = null, LeaseExpiresUtc = null } : i).ToArray();
             var item = items.FirstOrDefault(i => i.Kind == WorkItemKind.Task && i.State == WorkItemState.Ready
-                && (i.Assignee.Length == 0 || i.Assignee == agent)
+                && (ticketKey is null || i.Key == ticketKey) && (i.Assignee.Length == 0 || i.Assignee == agent)
                 && i.DependsOn.All(key => items.Any(d => d.Key == key && d.State == WorkItemState.Done)));
             if (item is not null)
             {
@@ -134,7 +137,7 @@ public sealed class LocalWorkBoardStore
             CheckLease(item, agent, token);
             if (string.IsNullOrWhiteSpace(revision) || string.IsNullOrWhiteSpace(verification))
                 throw new ArgumentException("A result revision/artifact hash and verification evidence are required. Submission is not approval.");
-            return item with { State = WorkItemState.Review, ResultRevision = revision.Trim(), VerificationEvidence = verification.Trim(),
+            return item with { State = WorkItemState.Review, ResultRevision = revision.Trim(), VerificationEvidence = verification.Trim(), ResultKind = "verified-work",
                 LeaseToken = null, LeaseExpiresUtc = null };
         }), ct);
 
@@ -148,6 +151,7 @@ public sealed class LocalWorkBoardStore
             if (string.IsNullOrWhiteSpace(note)) throw new ArgumentException("A review note is required.");
             var board = Change(Required(current), key, item =>
             {
+                if (accepted && item.ResultKind == "proposal") throw new InvalidOperationException("A proposal is not verified implementation. Apply and test it through an execution workflow before completion.");
                 if (item.State != WorkItemState.Review || item.Assignee == reviewer)
                     throw new InvalidOperationException("A different reviewer must evaluate submitted work.");
                 return item with { State = accepted ? WorkItemState.Done : WorkItemState.Ready };
@@ -196,6 +200,15 @@ public sealed class LocalWorkBoardStore
             ct.ThrowIfCancellationRequested();
             using var db = Open(); using var tx = db.BeginTransaction(deferred: false);
             var previous = Read(db, tx, id); var board = update(previous);
+            if (previous is null && board.Project.Planning is { } planning)
+            {
+                using var guard = db.CreateCommand(); guard.Transaction = tx;
+                guard.CommandText = "SELECT payload FROM work_planning_drafts WHERE project_key=$key AND revision=$revision";
+                guard.Parameters.AddWithValue("$key", planning.Key); guard.Parameters.AddWithValue("$revision", planning.Revision);
+                var stored = guard.ExecuteScalar() as string;
+                if (stored is null || JsonSerializer.Deserialize<WorkPlanningDraft>(stored, Json)?.PlanApproved != true)
+                    throw new InvalidOperationException("The approved plan changed before publication. Reload and regenerate the sprint backlog.");
+            }
             if (previous is null && Read(db, tx, board.Project.Id) is not null)
                 throw new InvalidOperationException("This project ID already belongs to another board.");
             if (!ReferenceEquals(previous, board))
@@ -260,6 +273,18 @@ public sealed class LocalWorkBoardStore
         if (items.Count == 0 || items.Select(i => i.Key).Distinct().Count() != items.Count
             || items.Select(i => i.StableId).Distinct().Count() != items.Count) throw new ArgumentException("Plan needs unique tickets and stable IDs.");
         var map = items.ToDictionary(i => i.Key);
+        var sprints = project.Sprints;
+        if (sprints.Select(s => s.Key).Distinct().Count() != sprints.Length || sprints.Select(s => s.Order).Distinct().Count() != sprints.Length
+            || sprints.Any(s => string.IsNullOrWhiteSpace(s.Key) || s.Order < 1 || s.DurationDays is < 1 or > 30))
+            throw new ArgumentException("Sprint keys and ordering must be unique, with valid durations.");
+        if (sprints.Length > 0)
+        {
+            var order = sprints.ToDictionary(s => s.Key, s => s.Order);
+            if (items.Any(i => i.Kind is WorkItemKind.Task or WorkItemKind.Story && !order.ContainsKey(i.SprintKey)))
+                throw new ArgumentException("Every story and task needs a valid sprint.");
+            if (items.Where(i => i.Kind == WorkItemKind.Task).Any(i => i.DependsOn.Any(d => map.TryGetValue(d, out var dep) && order.GetValueOrDefault(dep.SprintKey, int.MaxValue) > order[i.SprintKey])))
+                throw new ArgumentException("Dependencies cannot be scheduled after their dependent tasks.");
+        }
         foreach (var item in items)
         {
             if (!Regex.IsMatch(item.Key, "^" + project.Key + "-[1-9][0-9]*$") || string.IsNullOrWhiteSpace(item.StableId)

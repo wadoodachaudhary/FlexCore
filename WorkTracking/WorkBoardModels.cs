@@ -19,6 +19,12 @@ public sealed record WorkItem
     public string[] Labels { get; init; } = [];
     public WorkItemState State { get; init; } = WorkItemState.Draft;
     public string Assignee { get; init; } = "";
+    public string SourceObligationKey { get; init; } = "";
+    public string SprintKey { get; init; } = "";
+    public int EstimatePoints { get; init; }
+    public WorkAgentProfile? Agent { get; init; }
+    public string ResultKind { get; init; } = "";
+    public string LastRunError { get; init; } = "";
     public string SuggestedRole { get; init; } = "migration";
     public string ResultRevision { get; init; } = "";
     public string VerificationEvidence { get; init; } = "";
@@ -39,6 +45,8 @@ public sealed record WorkProject
     public string Summary { get; init; } = "";
     public DateTimeOffset CreatedUtc { get; init; } = DateTimeOffset.UtcNow;
     public bool Approved { get; init; }
+    public WorkPlanningDraft? Planning { get; init; }
+    public WorkSprint[] Sprints { get; init; } = [];
 }
 
 public sealed record WorkBoardSnapshot(WorkProject Project, IReadOnlyList<WorkItem> Items);
