@@ -7,6 +7,7 @@ namespace Fx.ControlKit.Llm;
 public static class ProviderKeys
 {
     public const string OpenAi = "openai";
+    public const string CodexSubscription = "codex-subscription";
     public const string AzureOpenAi = "azureopenai";
     public const string AzureFoundry = "azurefoundry";
     public const string Anthropic = "anthropic";
@@ -22,7 +23,7 @@ public static class ProviderKeys
     public static readonly IReadOnlyList<string> All = new[]
     {
         OpenAi, AzureOpenAi, AzureFoundry, Anthropic, Gemini, Ollama, OllamaCloud,
-        HuggingFace, Groq, XAi, Mistral, Local
+        HuggingFace, Groq, XAi, Mistral, Local, CodexSubscription
     };
 
     // Spellings other apps (GhostWriter, Mutarjim) already use for the same

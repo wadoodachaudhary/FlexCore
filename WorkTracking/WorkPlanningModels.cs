@@ -26,6 +26,8 @@ public sealed record WorkPlanningDraft
     public string TargetStack { get; init; } = "Blazor Server / C# / .NET / FlexCore";
     public string Goals { get; init; } = "Preserve legacy behavior and data semantics.";
     public WorkApplicationContext[] ContextApplications { get; init; } = [];
+    public string ReplannedFrom { get; init; } = "";
+    public string ProposedBacklogJson { get; init; } = "";
     public int SprintCount { get; init; } = 4;
     public int SprintDays { get; init; } = 14;
     public required WorkAgentProfile Planner { get; init; }

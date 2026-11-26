@@ -30,6 +30,7 @@ public sealed partial class LocalWorkBoardStore
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS work_step_revisions(project_key TEXT NOT NULL, step TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(project_key,step,revision));
             CREATE TABLE IF NOT EXISTS work_planning_drafts(project_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_projects(id TEXT PRIMARY KEY, project_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
@@ -200,6 +201,7 @@ public sealed partial class LocalWorkBoardStore
             ct.ThrowIfCancellationRequested();
             using var db = Open(); using var tx = db.BeginTransaction(deferred: false);
             var previous = Read(db, tx, id); var board = update(previous);
+            WorkStepRevision? checkpoint = null;
             if (previous is null && board.Project.Planning is { } planning)
             {
                 using var guard = db.CreateCommand(); guard.Transaction = tx;
@@ -222,8 +224,12 @@ public sealed partial class LocalWorkBoardStore
                 cmd.Parameters.AddWithValue("$id", board.Project.Id); cmd.Parameters.AddWithValue("$key", key);
                 cmd.Parameters.AddWithValue("$actor", actor); cmd.Parameters.AddWithValue("$action", action);
                 cmd.Parameters.AddWithValue("$detail", detail); cmd.Parameters.AddWithValue("$time", _time.GetUtcNow().ToString("O")); cmd.ExecuteNonQuery();
+                if (previous is null || action is "agent-assigned" or "assigned" or "proposal-submitted" or "submitted-for-review" or "accepted" or "changes-requested" or "plan-approved")
+                    checkpoint = SaveStep(db, tx, new(board.Project.Key, previous is null ? "board" : "launchpad", 0,
+                        previous is null ? JsonSerializer.Serialize(board, Json) : JsonSerializer.Serialize(new { board.Project.Key, Assignments = board.Items.Where(i => i.Kind == WorkItemKind.Task).Select(i => new { i.Key, i.Title, i.State, i.Assignee, i.Agent, i.ResultKind, i.ResultRevision }) }, Json), action, actor, detail, _time.GetUtcNow()));
             }
             tx.Commit();
+            if (checkpoint is not null) ExportStep(checkpoint);
             // Take another write lock so another process cannot publish an older projection after a newer commit.
             using var projection = db.BeginTransaction(deferred: false);
             var latest = Required(Read(db, projection, board.Project.Id));

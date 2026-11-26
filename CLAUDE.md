@@ -1,3 +1,8 @@
+## 2026-11-26 Durable step revision history
+
+- WorkTracking persists immutable per-project step revisions in SQLite, with expected-revision conflict checks and recoverable private JSON history folders. Intake/plan checkpoints and board/launchpad snapshots are captured with their authoritative writes; leases are not exposed in launchpad snapshots.
+- Hosts can reopen outputs for cross-model review, retain provenance and fork reviewed plans without replacing existing boards. New branches do not inherit approval or execution state. No worker or model execution is introduced by the shared store.
+
 ## 2026-11-26 Read-only planning context
 
 - Optional `WorkApplicationContext` records on planning drafts retain already-converted dependency names, folders, project entry points, reuse notes and host-produced metadata fingerprints. Existing drafts default to no context.

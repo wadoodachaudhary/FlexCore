@@ -38,7 +38,10 @@ public sealed partial class LocalWorkBoardStore
             cmd.CommandText = "INSERT INTO work_planning_drafts(project_key,revision,payload) VALUES($key,$revision,$json) ON CONFLICT(project_key) DO UPDATE SET revision=$revision,payload=$json";
             cmd.Parameters.AddWithValue("$revision", saved.Revision);
             cmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(saved, Json)); cmd.ExecuteNonQuery();
+            var planCheckpoint = SaveStep(db, tx, new(saved.Key, "plan", 0, saved.PlanMarkdown, saved.PlanApproved ? "approved" : "generated", saved.Planner.Id, saved.PlanProvenance, _time.GetUtcNow()));
+            var intakeCheckpoint = SaveStep(db, tx, new(saved.Key, "intake", 0, JsonSerializer.Serialize(saved with { Baseline = null, PlanMarkdown = "", PlanApproved = false, PlanApprovedBy = "", PlanApprovedUtc = null }, Json), "snapshot", saved.Planner.Id, "Saved application intake", _time.GetUtcNow()));
             tx.Commit();
+            ExportStep(planCheckpoint); ExportStep(intakeCheckpoint);
             using var projection = db.BeginTransaction(deferred: false);
             using var latest = db.CreateCommand(); latest.Transaction = projection;
             latest.CommandText = "SELECT payload FROM work_planning_drafts WHERE project_key=$key";
