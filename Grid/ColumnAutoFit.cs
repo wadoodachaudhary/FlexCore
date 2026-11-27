@@ -90,13 +90,15 @@ internal static class ColumnAutoFit
     /// <summary>Asks grid-control.js for the intrinsic content width of each field. Returns
     /// null when the DOM is unavailable; the caller then falls back to
     /// <see cref="EstimateWidth"/>. The scroller's client width, when known, is reported
-    /// through <paramref name="onContainerWidth"/> — the ceiling for unbounded columns.
+    /// through <paramref name="onContainerWidth"/> — the ceiling for unbounded columns — when it is over 80 px,
+    /// and through <paramref name="onContainerReported"/> whatever it is: none is reported for a grid that is
+    /// not laid out (display:none).
     /// <paramref name="texts"/> (field → display texts) adds rows the DOM does not hold: the
     /// browser measures them in the font of that column's rendered cells.</summary>
     public static async Task<Dictionary<string, double>?> MeasureAsync(
         IJSObjectReference? module, ElementReference host, IReadOnlyList<string> fields,
         int sampleSize, ColumnAutoFitDomOptions dom, Action<double>? onContainerWidth,
-        IReadOnlyDictionary<string, string[]>? texts = null)
+        IReadOnlyDictionary<string, string[]>? texts = null, Action<double>? onContainerReported = null)
     {
         if (module == null || fields.Count == 0)
             return null;
@@ -107,6 +109,8 @@ internal static class ColumnAutoFit
             if (measured != null && measured.TryGetValue(ContainerWidthKey, out var containerPx))
             {
                 measured.Remove(ContainerWidthKey);
+                // Any width at all means the grid is laid out; the ceiling only takes a usable one.
+                onContainerReported?.Invoke(containerPx);
                 if (containerPx > 80)
                     onContainerWidth?.Invoke(containerPx);
             }

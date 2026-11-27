@@ -279,11 +279,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool PageWidth { get; set; }
     [Parameter] public EventCallback<bool> PageWidthChanged { get; set; }
     /// <summary>Sizes the visible columns to their content when the grid first shows them, as the header menu's
-    /// Best Fit All Columns does, so the table is as wide as its columns rather than the page. Fitted once; the
-    /// widths are not saved as the user's. Page Width, when on, takes precedence.</summary>
+    /// Best Fit All Columns does, so the table is as wide as its columns rather than the page. The grid keeps its
+    /// <see cref="WidthMode"/> for its scroll area (leave it FillAvailable so the scroll area spans the host),
+    /// and its table takes the FitColumns mode the menu's Best Fit gives whenever no other mode is chosen. The fit
+    /// waits until the grid is laid out (a grid in a hidden tab is fitted when it is shown), is made again once
+    /// when the first rows arrive after a fit without rows and when the whole column set is replaced, and is not
+    /// saved as the user's widths. Page Width, when on, takes precedence; a width the user sets (a drag, the
+    /// header menu) and one restored from <see cref="PersistenceKey"/> settings or <see cref="SetStateAsync"/>
+    /// keeps its column out of the fit.</summary>
     [Parameter] public bool BestFitOnLoad { get; set; }
     public bool IsPageWidth => _runtimePageWidth ?? PageWidth;
-    internal GridWidthMode EffectiveWidthMode => IsPageWidth ? GridWidthMode.FillAvailable : (_runtimeWidthMode ?? WidthMode);
+    internal GridWidthMode EffectiveWidthMode => IsPageWidth ? GridWidthMode.FillAvailable : (_runtimeWidthMode ?? DeclaredTableWidthMode);
+    // A BestFitOnLoad table stays as wide as its columns when a reset clears the chosen mode; the scroll area keeps
+    // the declared WidthMode (the fit-columns class needs WidthMode itself to be FitColumns).
+    private GridWidthMode DeclaredTableWidthMode =>
+        BestFitOnLoad && WidthMode == GridWidthMode.FillAvailable ? GridWidthMode.FitColumns : WidthMode;
     [Parameter] public bool EnableViewportSafeSizing { get; set; } = true;
     [Parameter] public string ViewportSafeMaxWidth { get; set; } = "";
     [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
@@ -2786,10 +2796,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>
     /// Maximum DOM scroll height in pixels allowed for virtual row spacers.
     /// When total theoretical height (TotalRows × RowHeight) exceeds this threshold,
-    /// FlexGrid activates virtual height scaling so browser element height limits
-    /// (17.8M px in Firefox, 33.5M px in Blink/WebKit) are never exceeded, enabling
-    /// seamless infinite scrolling for 1,000,000+ rows.
-    /// Defaults to 6,000,000 px (the battle-tested standard cross-browser ceiling).
+    /// the grid scales its spacers so browser element height limits are never exceeded and the last rows
+    /// stay reachable: Firefox's is 17.8M CSS px; Blink's and WebKit's is 33.5M device px, so in CSS px it
+    /// shrinks with page zoom and the display scale (13.4M at 250%). Scaled scrolling is approximate: the
+    /// rendered rows keep their real height while the window moves faster than the content, so the wheel can
+    /// pass over rows and a reveal can land beside its row.
+    /// Defaults to 6,000,000 px (300,000 rows of 20 px scroll row for row), which holds to an effective zoom
+    /// of about 5.5.
     /// </summary>
     [Parameter] public double MaxVirtualScrollHeight { get; set; } = 6_000_000;
 
@@ -5181,7 +5194,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             foreach (var col in EffectiveColumns)
                 if (settings.Widths.TryGetValue(col.Field, out var w))
+                {
                     col.RuntimeWidth = w;
+                    RememberUserColumnWidth(col);
+                }
         }
         if (settings.FrozenPositions != null)
         {
@@ -5275,8 +5291,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ColumnOrder     = order,
             Visibility      = visibility,
             // Carry forward any existing user state for fields the dialog
-            // didn't touch — widths, header overrides, group columns.
-            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
+            // didn't touch — widths, header overrides, group columns. A
+            // BestFitOnLoad grid's opening-fit widths are not the user's.
+            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field)
+                                                          && (!BestFitOnLoad || IsUserSizedColumn(c) || IsPageWidthSized(c)))
                                      .ToDictionary(c => c.Field, c => c.RuntimeWidth!.Value),
             FrozenPositions = EffectiveColumns.Where(c => !string.IsNullOrEmpty(c.Field))
                                      .ToDictionary(c => c.Field, c => c.EffectiveIsFrozen
@@ -5295,14 +5313,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Builds a snapshot of every persistable aspect of the grid's
     /// current state. Shared by the IGridSettingsStore save path and the
     /// <see cref="OnLayoutChanged"/> event so both stay in sync.</summary>
-    private GridSettings BuildCurrentSnapshot()
+    /// <param name="userWidthsOnly">For the saved settings, <see cref="OnLayoutChanged"/> and GetState: a
+    /// BestFitOnLoad grid leaves out the widths its opening fit gave, which are not the user's.</param>
+    private GridSettings BuildCurrentSnapshot(bool userWidthsOnly = false)
     {
+        var keepFitWidths = !userWidthsOnly || !BestFitOnLoad;
         return new GridSettings
         {
             ColumnOrder     = EffectiveColumns.Select(c => c.Field).Where(f => !string.IsNullOrEmpty(f)).ToList(),
             Visibility      = _visibilityOverrides.Count > 0 ? new Dictionary<string, bool>(_visibilityOverrides) : null,
             HeaderOverrides = _headerOverrides.Count > 0 ? new Dictionary<string, string>(_headerOverrides) : null,
-            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
+            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field)
+                                                          && (keepFitWidths || IsUserSizedColumn(c) || IsPageWidthSized(c)))
                                      .ToDictionary(c => c.Field, c => c.RuntimeWidth!.Value),
             FrozenPositions = EffectiveColumns.Where(c => !string.IsNullOrEmpty(c.Field))
                                      .ToDictionary(c => c.Field, c => c.EffectiveIsFrozen
@@ -5323,7 +5345,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         GridStateChangeKind changeKind = GridStateChangeKind.Columns)
     {
         if (OnLayoutChanged.HasDelegate)
-            await OnLayoutChanged.InvokeAsync(snapshot ?? BuildCurrentSnapshot());
+            await OnLayoutChanged.InvokeAsync(snapshot ?? BuildCurrentSnapshot(userWidthsOnly: true));
         await NotifyGridStateChangedAsync(changeKind);
     }
 
@@ -5332,7 +5354,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!_gridSettingsLoaded || string.IsNullOrEmpty(PersistenceKey) || GridSettingsStore == null)
             return;
 
-        var settings = BuildCurrentSnapshot();
+        var settings = BuildCurrentSnapshot(userWidthsOnly: true);
         // Refresh the cache so the post-rebuild re-apply uses the latest
         // user state (otherwise a host-triggered rebuild after a user mutation
         // would re-apply pre-mutation state from the previous load).
@@ -5386,7 +5408,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _lastWidthModeParam = WidthMode;
             _runtimeWidthMode = null;
         }
-
         _autoWidthPending = true;
         EnsureThemeInitialized();
         EnsureAdvancedViewInitialized();
@@ -14274,6 +14295,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnPageWidthContainerResizedAsync(double containerWidth)
     {
+        if (_bestFitOnLoadAwaitingLayout && !IsPageWidth)
+        {
+            // A BestFitOnLoad grid that was hidden now has a size: the next after-render fits it.
+            _bestFitOnLoadLayoutChanged = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
         if (!IsPageWidth || _applyingPageWidth)
             return;
         await FitColumnsToPageWidthCoreAsync(persist: false);
@@ -14295,17 +14323,202 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return $"{cols}#{_groupDescriptors.Count}#{GetCurrentDataSourceCount()}";
     }
 
-    private bool _bestFitOnLoadDone;
+    private enum BestFitOnLoadState { Pending, FittedWithoutRows, Done }
+    private BestFitOnLoadState _bestFitOnLoadState;
+    // The column instances the opening fit sized: a column set that shares none of them was replaced.
+    private HashSet<GridColumn>? _bestFitOnLoadColumns;
+    private bool _bestFitOnLoadAwaitingLayout;
+    private bool _bestFitOnLoadLayoutChanged;
+    private bool _bestFitOnLoadRunning;
+    private bool _bestFitOnLoadRecheck;
+    // Moves on with each SetStateAsync: a fit measured before it does not stand for the restored view.
+    private int _bestFitOnLoadGeneration;
+    // Widths the user set (a drag, the header menu) or saved settings restored, by field: such a column keeps its
+    // width while it still has it (a width carried to a re-created column counts; an estimate or a reset does not).
+    private readonly Dictionary<string, double> _userColumnWidths = new(StringComparer.Ordinal);
 
-    // BestFitOnLoad: the header menu's Best Fit All Columns, once the columns are registered, without saving the widths.
+    private void RememberUserColumnWidth(GridColumn col)
+    {
+        if (!string.IsNullOrEmpty(col.Field) && col.RuntimeWidth is double width)
+            _userColumnWidths[col.Field] = width;
+    }
+
+    // While Page Width is on, the columns it sizes (the shown ones) carry its widths, not the opening fit's; a
+    // hidden or grouped-away column still carries the opening fit's.
+    private bool IsPageWidthSized(GridColumn col) => IsPageWidth && VisibleColumns.Contains(col);
+
+    private bool IsUserSizedColumn(GridColumn col)
+        => !string.IsNullOrEmpty(col.Field)
+           && col.RuntimeWidth is double width
+           && _userColumnWidths.TryGetValue(col.Field, out var user)
+           && Math.Abs(width - user) < 0.5;
+
+    // SetStateAsync replaces the widths: the restored ones are the user's, and the columns it leaves without one
+    // open on Best Fit again.
+    private void ResetBestFitOnLoadForRestoredState()
+    {
+        _userColumnWidths.Clear();
+        _bestFitOnLoadGeneration++;
+        if (!BestFitOnLoad)
+            return;
+        _bestFitOnLoadState = BestFitOnLoadState.Pending;
+        _bestFitOnLoadColumns = null;
+    }
+
+    // Page Width takes precedence, and turning it off later is the user's own sizing, not the opening fit.
+    private void MarkBestFitOnLoadSettled()
+    {
+        if (!BestFitOnLoad)
+            return;
+        _bestFitOnLoadState = BestFitOnLoadState.Done;
+        _bestFitOnLoadAwaitingLayout = false;
+        _bestFitOnLoadColumns = Columns.Where(IsColumnVisible).ToHashSet();
+    }
+
+    // A null DataSource, a lazy sequence and an ItemsProvider grid whose first window has not arrived have no rows yet.
+    private bool BestFitOnLoadHasRows()
+    {
+        if (UsesItemsProvider)
+            return _providerWindowItems.Count > 0;
+        var count = GetCurrentDataSourceCount();
+        if (count >= 0)
+            return count > 0;
+        try
+        {
+            return DataSource?.Any() == true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    // BestFitOnLoad: the header menu's Best Fit All Columns without saving the widths, once the grid is laid out
+    // and shows rows; again once when the first rows arrive after a fit without rows, and when the column set is
+    // replaced. Render passes overlap while one waits on the browser: one fit runs at a time, and a pass that
+    // came in meanwhile is looked at again when it ends.
     private async Task SyncBestFitOnLoadAfterRenderAsync()
     {
-        if (!BestFitOnLoad || _bestFitOnLoadDone || IsPageWidth || _columnUpdateDepth != 0 || !VisibleColumns.Any())
+        if (_bestFitOnLoadRunning)
+        {
+            _bestFitOnLoadRecheck = true;
             return;
-        _bestFitOnLoadDone = true;
+        }
+        _bestFitOnLoadRunning = true;
+        try
+        {
+            do
+            {
+                _bestFitOnLoadRecheck = false;
+                await SyncBestFitOnLoadCoreAsync();
+            }
+            while (_bestFitOnLoadRecheck);
+        }
+        finally
+        {
+            _bestFitOnLoadRunning = false;
+        }
+    }
+
+    private async Task SyncBestFitOnLoadCoreAsync()
+    {
+        if (!BestFitOnLoad)
+        {
+            // Turned off while it waited to be shown: drop the observer it kept.
+            await StopAwaitingLayoutAsync();
+            return;
+        }
+        if (_columnUpdateDepth != 0)
+            return;
+        var visible = Columns.Where(IsColumnVisible).ToList();
+        if (visible.Count == 0)
+            return;
+        if (IsPageWidth)
+        {
+            MarkBestFitOnLoadSettled();
+            return;
+        }
+
+        var replaced = _bestFitOnLoadColumns != null && !visible.Any(_bestFitOnLoadColumns.Contains);
+        var hasRows = BestFitOnLoadHasRows();
+        if (!replaced && (_bestFitOnLoadState == BestFitOnLoadState.Done
+                          || (_bestFitOnLoadState == BestFitOnLoadState.FittedWithoutRows && !hasRows)))
+        {
+            // Nothing left to fit (the rows went while it waited to be shown): drop the observer.
+            await StopAwaitingLayoutAsync();
+            return;
+        }
+        // Hidden: measure again only when the observer reports a size (or could not be registered).
+        if (_bestFitOnLoadAwaitingLayout && _pageWidthObserverRegistered && !_bestFitOnLoadLayoutChanged)
+            return;
+        _bestFitOnLoadLayoutChanged = false;
+
+        var generation = _bestFitOnLoadGeneration;
+        var laidOut = await BestFitOnLoadFitAsync(visible, generation);
+        if (generation != _bestFitOnLoadGeneration)
+        {
+            // A state was restored while the browser measured: fit the restored view instead (the measurement
+            // used the observer's report of a grid just shown, so the recheck may measure again).
+            _bestFitOnLoadLayoutChanged = true;
+            _bestFitOnLoadRecheck = true;
+            return;
+        }
+        if (!laidOut)
+        {
+            // Not laid out (a hidden tab or pane): fitting now would size every column to nothing.
+            // The container observer reports the size the grid gets when it is shown.
+            _bestFitOnLoadAwaitingLayout = true;
+            await EnsurePageWidthObserverRegisteredAsync(untilShown: true);
+            return;
+        }
+
+        _bestFitOnLoadState = hasRows ? BestFitOnLoadState.Done : BestFitOnLoadState.FittedWithoutRows;
+        _bestFitOnLoadColumns = visible.ToHashSet();
+        await StopAwaitingLayoutAsync();
+    }
+
+    private async Task StopAwaitingLayoutAsync()
+    {
+        if (!_bestFitOnLoadAwaitingLayout)
+            return;
+        _bestFitOnLoadAwaitingLayout = false;
+        // Page Width keeps the observer for its own fits.
+        if (!IsPageWidth)
+            await UnregisterPageWidthObserverAsync();
+    }
+
+    // The opening fit: Best Fit All Columns over the columns the user has not sized. False when the browser
+    // measured a grid that is not laid out; the measurement reports the scroll area's width when it is.
+    private async Task<bool> BestFitOnLoadFitAsync(List<GridColumn> visible, int generation)
+    {
+        var targets = visible.Where(c => c.AllowAutoFit && !IsUserSizedColumn(c)).ToList();
+        if (targets.Count == 0)
+            return true;
+
+        var rows = BuildAutoFitRows(out var rowsAreView);
+        var sampleSize = Math.Max(1, AutoFitSampleSize);
+        var sample = rows.Count > sampleSize ? rows.GetRange(0, sampleSize) : rows;
+        var measured = await MeasureColumnContentWidthsAsync(targets, rowsAreView ? rows : null);
+        if (generation != _bestFitOnLoadGeneration)
+            return true;
+        if (_autoFitMeasuredContainerPx == 0)
+            return false;
+
+        // While the browser measured: Page Width turned on, or a width restored or set by the user, wins.
+        if (!BestFitOnLoad || IsPageWidth)
+            return true;
+        targets = targets.Where(c => IsColumnVisible(c) && !IsUserSizedColumn(c)).ToList();
+        var changes = ColumnAutoFit.ComputeBestFit(
+            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx, AutoFitWidthScale);
+        foreach (var change in changes)
+            targets[change.Index].RuntimeWidth = change.NewWidth;
+
         var modeChanged = EffectiveWidthMode != GridWidthMode.FitColumns;
-        _runtimeWidthMode = GridWidthMode.FitColumns;
-        await AutoFitCoreAsync(Columns.Where(IsColumnVisible).ToList(), persist: false, forceStateRender: modeChanged);
+        if (modeChanged)
+            _runtimeWidthMode = GridWidthMode.FitColumns;
+        if (changes.Count > 0 || modeChanged)
+            await InvokeAsync(StateHasChanged);
+        return true;
     }
 
     private async Task SyncPageWidthAfterRenderAsync()
@@ -14328,11 +14541,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             _lastPageWidthSignature = "";
             _pageWidthFitPending = false;
-            await UnregisterPageWidthObserverAsync();
+            // A hidden BestFitOnLoad grid keeps the observer until it is shown and fitted.
+            if (!_bestFitOnLoadAwaitingLayout)
+                await UnregisterPageWidthObserverAsync();
         }
     }
 
-    private async Task EnsurePageWidthObserverRegisteredAsync()
+    /// <param name="untilShown">For a BestFitOnLoad grid waiting to be shown: the observer also reports the width
+    /// the grid has when it registers and a width it gets again after being hidden, not only a change of width.</param>
+    private async Task EnsurePageWidthObserverRegisteredAsync(bool untilShown = false)
     {
         if (_pageWidthObserverRegistered || !AutoFitUseDomMeasurement)
             return;
@@ -14340,7 +14557,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
-            await _gridJsModule.InvokeVoidAsync("registerGridPageWidthObserver", _gridHostElement, ColumnAutoFitDomOptions.Grid.Scroller, _gridDotNetRef);
+            await _gridJsModule.InvokeVoidAsync("registerGridPageWidthObserver", _gridHostElement, ColumnAutoFitDomOptions.Grid.Scroller, _gridDotNetRef, untilShown);
             _pageWidthObserverRegistered = true;
         }
         catch (Exception)
@@ -14369,6 +14586,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!IsPageWidth)
             return false;
 
+        // The widths Page Width gave stay on screen as the user's own sizing (as turning it off from the menu).
         foreach (var visibleCol in VisibleColumns)
         {
             if (!visibleCol.RuntimeWidth.HasValue)
@@ -14377,6 +14595,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 if (px > 0)
                     visibleCol.RuntimeWidth = px;
             }
+            RememberUserColumnWidth(visibleCol);
         }
 
         _runtimePageWidth = false;
@@ -14552,6 +14771,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     continue;
             }
             col.RuntimeWidth = width;
+            RememberUserColumnWidth(col);
             if (EventsRef?.ColumnResized.HasDelegate == true)
                 await EventsRef.ColumnResized.InvokeAsync(
                     new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width });
@@ -15763,6 +15983,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
+        RememberUserColumnWidth(col);
         LogGridAction("ColumnResized", $"{col.Field}={Math.Round(settled)}px", $"From {Math.Round(_resizeStartWidth)}px");
         if (EventsRef?.ColumnResized.HasDelegate == true)
         {
@@ -17457,6 +17678,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx, AutoFitWidthScale);
         if (changes.Count == 0)
         {
+            if (persist)
+                foreach (var target in targets)
+                    RememberUserColumnWidth(target);
             if (forceStateRender)
             {
                 if (persist)
@@ -17469,6 +17693,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
+        HashSet<GridColumn>? cancelled = null;
         foreach (var change in changes)
         {
             var col = targets[change.Index];
@@ -17479,7 +17704,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
                 await EventsRef.ColumnResizing.InvokeAsync(resizing);
                 if (resizing.Cancel)
+                {
+                    (cancelled ??= new()).Add(col);
                     continue;
+                }
             }
             col.RuntimeWidth = width;
 
@@ -17492,6 +17720,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (persist)
         {
+            // A fit the user asked for (header menu, grip double-click) sizes these columns as the user's;
+            // a column whose resize the host refused keeps the width it had, which is not.
+            foreach (var target in targets)
+                if (cancelled == null || !cancelled.Contains(target))
+                    RememberUserColumnWidth(target);
             await SaveGridSettingsAsync();
             await FireLayoutChangedAsync();
         }
@@ -17543,10 +17776,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private double _autoFitCeilingPx = 2000;
+    // The scroll area's width the last measurement reported: -1 when the browser did not measure (no DOM
+    // measurement, no field, the module unavailable), 0 when it measured a grid that is not laid out.
+    private double _autoFitMeasuredContainerPx = -1;
 
     private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(
         List<GridColumn> columns, IReadOnlyList<TValue>? view)
     {
+        _autoFitMeasuredContainerPx = -1;
         if (!AutoFitUseDomMeasurement)
             return null;
 
@@ -17568,9 +17805,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // EstimateColumnWidth covers every one of those.
             return null;
         }
+        _autoFitMeasuredContainerPx = 0;
         return await ColumnAutoFit.MeasureAsync(_gridJsModule, _gridHostElement, fields, AutoFitSampleSize,
             ColumnAutoFitDomOptions.Grid, containerPx => _autoFitCeilingPx = containerPx,
-            BuildEveryRowAutoFitTexts(columns, view));
+            BuildEveryRowAutoFitTexts(columns, view), containerPx => _autoFitMeasuredContainerPx = containerPx);
     }
 
     /// <summary>When the host sets <see cref="AutoFitEveryRow"/> and its

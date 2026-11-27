@@ -258,11 +258,10 @@ public partial class SQLTableControl : IDisposable
                 [nameof(GridControl<SqlTableRow>.AllowColumnInsert)] = false,
                 [nameof(GridControl<SqlTableRow>.ColumnMenuOnCells)] = true
             };
+            // Only the opening fit: the grid keeps the control's width, so the scroll area, the wheel and the
+            // fit's widest column still span the control while the table is as wide as its columns.
             if (BestFitColumns)
-            {
-                attributes[nameof(GridControl<SqlTableRow>.WidthMode)] = GridWidthMode.FitColumns;
                 attributes[nameof(GridControl<SqlTableRow>.BestFitOnLoad)] = true;
-            }
             if (AdditionalAttributes != null)
                 foreach (var pair in AdditionalAttributes)
                     attributes[pair.Key] = GridValue(pair.Key, pair.Value);

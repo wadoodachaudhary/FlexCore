@@ -24,13 +24,15 @@ public partial class GridControl<TValue>
     /// Returns a detached, serializable snapshot of public grid state. Local
     /// row identity state is complete when stable keys are available; provider
     /// cell/detail identity is limited to rows that are currently loaded.
+    /// A <see cref="BestFitOnLoad"/> grid's widths are only those the user set: restored, the other columns open
+    /// on Best Fit again.
     /// </summary>
     public GridState GetState()
     {
         var query = BuildProviderQueryDescriptor();
         var state = new GridState
         {
-            ColumnSettings = CloneGridSettings(BuildCurrentSnapshot()),
+            ColumnSettings = CloneGridSettings(BuildCurrentSnapshot(userWidthsOnly: true)),
             Sorts = query.Sorts.ToList(),
             Filters = query.Filters.ToList(),
             SearchText = SearchText,
@@ -191,6 +193,7 @@ public partial class GridControl<TValue>
                 column.RuntimeWidth = null;
                 column.ClearRuntimeFrozenOverride();
             }
+            ResetBestFitOnLoadForRestoredState();
             var appliedColumnSettings = CloneGridSettings(columnSettings);
             ApplyLoadedSettings(appliedColumnSettings);
             if (_gridSettingsLoaded)

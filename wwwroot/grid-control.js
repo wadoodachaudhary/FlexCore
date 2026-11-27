@@ -4608,17 +4608,23 @@ export function measureGridAvailableWidth(gridRoot, scrollerSelector, fieldAttri
 
 const gridPageWidthObservers = new WeakMap();
 
-export function registerGridPageWidthObserver(gridRoot, scrollerSelector, dotNetRef) {
+// untilShown: a grid waiting to be shown also reports the width it has when the observer starts (it may have been
+// shown just before) and a width it gets again after being hidden, not only a change of width.
+export function registerGridPageWidthObserver(gridRoot, scrollerSelector, dotNetRef, untilShown) {
     if (!gridRoot || !dotNetRef || typeof ResizeObserver !== "function") return;
     unregisterGridPageWidthObserver(gridRoot);
     const target = gridRoot.querySelector(scrollerSelector || ".fx-grid-content") || gridRoot;
-    let lastWidth = Math.round(target.clientWidth || gridRoot.clientWidth || 0);
+    let lastWidth = untilShown ? 0 : Math.round(target.clientWidth || gridRoot.clientWidth || 0);
     let timer = 0;
     let disposed = false;
     const observer = new ResizeObserver(() => {
         if (disposed || !gridRoot.isConnected) return;
         const width = Math.round(target.clientWidth || gridRoot.clientWidth || 0);
-        if (width <= 0 || Math.abs(width - lastWidth) < 2) return;
+        if (width <= 0) {
+            if (untilShown) lastWidth = 0;
+            return;
+        }
+        if (Math.abs(width - lastWidth) < 2) return;
         lastWidth = width;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
