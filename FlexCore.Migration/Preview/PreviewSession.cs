@@ -338,14 +338,33 @@ internal sealed class PreviewSession : IDisposable
                 else psi.Environment[pair.Key] = pair.Value;
             }
         }
+        PreviewPythonSite.Apply(psi);
         var home = Path.Combine(Home, "tmp");
         psi.Environment["HOME"] = Home;
         psi.Environment["TMPDIR"] = home;
         psi.Environment["TMP"] = home;
         psi.Environment["TEMP"] = home;
-        psi.Environment.Remove("DISPLAY");
+        // Qt is pinned to its offscreen plugin above, and a Java launch adds the headless
+        // flag when this mode is set, so neither opens a window. FLTK on X11 still needs
+        // the current DISPLAY to allocate the image-surface pixmap; it does not map a
+        // window in this mode. macOS FLTK draws into a Quartz bitmap and ignores DISPLAY.
+        // The private HOME would hide ~/.Xauthority, so point X11 at the operator's cookie.
+        KeepDisplayAuthority(psi);
         psi.Environment.Remove("WAYLAND_DISPLAY");
         return psi;
+    }
+
+    private static void KeepDisplayAuthority(ProcessStartInfo start)
+    {
+        var authority = Environment.GetEnvironmentVariable("XAUTHORITY");
+        if (string.IsNullOrEmpty(authority))
+        {
+            var home = Environment.GetEnvironmentVariable("HOME");
+            if (!string.IsNullOrEmpty(home))
+                authority = Path.Combine(home, ".Xauthority");
+        }
+        if (!string.IsNullOrEmpty(authority) && File.Exists(authority))
+            start.Environment["XAUTHORITY"] = authority;
     }
 
     private static long FrameStamp(byte[] bytes)
@@ -923,6 +942,7 @@ internal sealed class PreviewSession : IDisposable
                 else psi.Environment[pair.Key] = pair.Value;
             }
         }
+        PreviewPythonSite.Apply(psi);
         if (!gui) return psi;
         var temp = Path.Combine(Home, "tmp");
         psi.Environment["HOME"] = Home;

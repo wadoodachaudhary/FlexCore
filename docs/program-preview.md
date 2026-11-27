@@ -294,9 +294,9 @@ A pane with `Content` set is drawn in the group and is not started as a process.
 
 ## Offscreen painting on macOS
 
-A launch with `Offscreen = true` paints without Xvfb when the host is macOS, or when `xvfb` and `xdotool` are not installed. Linux keeps the virtual display when those tools exist. No Screen Recording permission and no extra package are required: Java paints a headless `BufferedImage`, and Qt uses the `offscreen` platform plugin that ships with Qt.
+A launch with `Offscreen = true` paints without Xvfb when the host is macOS, or when `xvfb` and `xdotool` are not installed. Linux keeps the virtual display when those tools exist. No Screen Recording permission and no extra preview package are required. Java paints a headless `BufferedImage`, Qt uses the `offscreen` platform plugin that ships with Qt, and an FLTK program can draw into `Fl_Image_Surface`.
 
-The host sets `FLEXCORE_PREVIEW=offscreen` and `FLEXCORE_PREVIEW_FRAME` to a file path. The program writes an `FCFR` frame (width, height, packed RGB24) and reads stdin lines: `move`, `down`, `up`, `wheel`, `key`, and `text`. Pointer coordinates are pixels in that frame. Set `FLEXCORE_PREVIEW_FORCE_OFFSCREEN=1` to exercise this path on a machine that also has Xvfb.
+The host sets `FLEXCORE_PREVIEW=offscreen` and `FLEXCORE_PREVIEW_FRAME` to a file path. The program writes an `FCFR` frame (width, height, packed RGB24) and reads stdin lines: `move`, `down`, `up`, `wheel`, `key`, and `text`. Pointer coordinates are pixels in that frame. Java paints a headless `BufferedImage`, Qt grabs the widget under `QT_QPA_PLATFORM=offscreen`, and FLTK draws into `Fl_Image_Surface`. On X11 that pixmap is allocated on the current `DISPLAY` (the host keeps `XAUTHORITY` pointed at the operator's cookie, because the preview `HOME` is private); the window is not mapped. macOS FLTK uses a Quartz bitmap and does not need `DISPLAY`. Set `FLEXCORE_PREVIEW_FORCE_OFFSCREEN=1` to exercise this path on a machine that also has Xvfb. The private preview `HOME` does not hide the operator's Python user site: the host puts that directory on `PYTHONPATH` unless the launch already set one.
 
 ## Try the harness
 
