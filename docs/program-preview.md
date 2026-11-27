@@ -284,6 +284,14 @@ ENTRYPOINT ["dotnet", "YourApp.dll"]
 
 Add the toolkit packages the migrated programs need. Enable WebSockets (Blazor Server). Turn ARR affinity on, or run a single instance, because a session's frames and input must reach the process that launched it. The page itself still loads when the image is built without these packages; the preview shows the install message.
 
+## Layout, static panes, and language launches
+
+`ProgramPreviewGroup` places panes in a column by default. `Orientation="ProgramPreviewOrientation.Horizontal"` puts them in one row. `ShowOrientationToggle` adds **Side by side** and **Stack** on the group toolbar; the choice stays until the bound `Orientation` changes.
+
+A pane with `Content` set is drawn in the group and is not started as a process. That is the fallback when a legacy program cannot run on this host, for example a VB6 form parsed by `Vb6FormParser` and drawn by `Vb6FormView`.
+
+`LanguageLaunch.JavaSources` compiles the named sources with `javac` and runs `java`. `LanguageLaunch.PythonScript` runs `python3` after checking that a module imports. Both use the server `PATH`. If the tool is missing, the process prints an install note and exits.
+
 ## Try the harness
 
 `tests/FlexCore.PreviewHarness` is a Blazor Server page that hosts `ConverterShell` in Run / Preview with two small Tk windows, plus a group that mixes a GUI program, a console program, and a local web server. It is a facility check, not a product sample. The page maps the frame route and the web app route.

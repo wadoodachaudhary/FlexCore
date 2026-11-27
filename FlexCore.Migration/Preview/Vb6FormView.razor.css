@@ -1,0 +1,61 @@
+.fx-vb6-window {
+    background: #d4d0c8;
+    color: #000;
+    font: 12px Tahoma, "MS Sans Serif", sans-serif;
+    border: 2px solid #fff;
+    box-shadow: inset -1px -1px 0 #404040, 1px 1px 0 #000;
+}
+
+.fx-vb6-title {
+    padding: 3px 8px;
+    background: #000080;
+    color: #fff;
+    font-weight: 650;
+}
+
+.fx-vb6-client {
+    position: relative;
+    overflow: hidden;
+}
+
+.fx-vb6-label,
+.fx-vb6-text,
+.fx-vb6-check,
+.fx-vb6-button {
+    position: absolute;
+    box-sizing: border-box;
+    font: inherit;
+}
+
+.fx-vb6-heading {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.fx-vb6-label {
+    white-space: pre-wrap;
+}
+
+.fx-vb6-text {
+    background: #fff;
+    border: 2px solid #808080;
+    box-shadow: inset 1px 1px 0 #404040;
+    padding: 2px 4px;
+}
+
+.fx-vb6-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fx-vb6-button {
+    background: #d4d0c8;
+    border: 2px solid #fff;
+    box-shadow: inset -1px -1px 0 #404040, 1px 1px 0 #000;
+    cursor: pointer;
+}
+
+.fx-vb6-missing {
+    margin: 0;
+}

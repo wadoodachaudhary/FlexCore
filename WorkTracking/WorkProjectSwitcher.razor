@@ -1,0 +1,10 @@
+@namespace Fx.ControlKit.WorkTracking
+
+<div id="@Id" class="fx-project-switcher" aria-label="@AriaLabel">
+    @if (!string.IsNullOrWhiteSpace(Label))
+    {
+        <span class="fx-project-switcher-label">@Label</span>
+    }
+    <DropDownListControl TValue="string" TItem="WorkProjectChoice" DataSource="@Choices" TextFieldName="Label" ValueFieldName="Key"
+                         Value="@Value" ValueChanged="OnChanged" Width="@Width" Enabled="@Enabled" AriaLabel="@AriaLabel" Placeholder="@Placeholder" />
+</div>

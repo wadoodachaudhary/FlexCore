@@ -332,6 +332,7 @@ await renderer.Dispatcher.InvokeAsync(() => ConverterChecks.Run(renderer, activa
 Console.WriteLine($"Converter shell checks: {checks - converterStart}");
 var previewStart = checks;
 await ProgramPreviewChecks.Run(renderer, activation.All, Check);
+await PreviewFacilityChecks.Run(renderer, Check);
 Console.WriteLine($"Program preview checks: {checks - previewStart}");
 var migrationStart = checks;
 await LegacyMigrationChecks.Run(Check);

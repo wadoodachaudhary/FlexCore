@@ -1,0 +1,38 @@
+@namespace Fx.ControlKit.Preview
+
+@if (Layout is null)
+{
+    <p class="fx-vb6-missing">No VB6 form is loaded.</p>
+}
+else
+{
+    <div class="fx-vb6-window" style="@WindowStyle" aria-label="@Layout.Caption">
+        <div class="fx-vb6-title">@Layout.Caption</div>
+        <div class="fx-vb6-client" style="@ClientStyle">
+            @foreach (var control in Layout.Controls)
+            {
+                var box = Box(control);
+                var name = control.Name;
+                @if (control.Kind == "TextBox")
+                {
+                    <input class="fx-vb6-text" style="@box" value="@TextOf(control)" @oninput="e => OnText(name, e)" />
+                }
+                else if (control.Kind == "CheckBox")
+                {
+                    <label class="fx-vb6-check" style="@box">
+                        <input type="checkbox" checked="@Checked(control)" @onchange="e => OnCheck(name, e)" />
+                        <span>@control.Caption</span>
+                    </label>
+                }
+                else if (control.Kind == "CommandButton")
+                {
+                    <button type="button" class="fx-vb6-button" style="@box" @onclick="() => ButtonClick.InvokeAsync(name)">@control.Caption</button>
+                }
+                else
+                {
+                    <div class="fx-vb6-label@(control.Name == TitleName ? " fx-vb6-heading" : "")" style="@box">@Shown(control)</div>
+                }
+            }
+        </div>
+    </div>
+}

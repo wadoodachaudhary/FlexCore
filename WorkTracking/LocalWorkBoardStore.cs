@@ -33,6 +33,7 @@ public sealed partial class LocalWorkBoardStore
             CREATE TABLE IF NOT EXISTS work_step_revisions(project_key TEXT NOT NULL, step TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(project_key,step,revision));
             CREATE TABLE IF NOT EXISTS work_planning_drafts(project_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_projects(id TEXT PRIMARY KEY, project_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS work_preferences(name TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS work_events(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
                 item_key TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL, at_utc TEXT NOT NULL);
             """;
@@ -283,6 +284,8 @@ public sealed partial class LocalWorkBoardStore
         if (sprints.Select(s => s.Key).Distinct().Count() != sprints.Length || sprints.Select(s => s.Order).Distinct().Count() != sprints.Length
             || sprints.Any(s => string.IsNullOrWhiteSpace(s.Key) || s.Order < 1 || s.DurationDays is < 1 or > 30))
             throw new ArgumentException("Sprint keys and ordering must be unique, with valid durations.");
+        if (sprints.Any(s => s.CapacityPoints < 0))
+            throw new ArgumentException("Sprint capacity cannot be negative.");
         if (sprints.Length > 0)
         {
             var order = sprints.ToDictionary(s => s.Key, s => s.Order);
@@ -290,6 +293,12 @@ public sealed partial class LocalWorkBoardStore
                 throw new ArgumentException("Every story and task needs a valid sprint.");
             if (items.Where(i => i.Kind == WorkItemKind.Task).Any(i => i.DependsOn.Any(d => map.TryGetValue(d, out var dep) && order.GetValueOrDefault(dep.SprintKey, int.MaxValue) > order[i.SprintKey])))
                 throw new ArgumentException("Dependencies cannot be scheduled after their dependent tasks.");
+            foreach (var sprint in sprints.Where(s => s.CapacityPoints > 0))
+            {
+                var points = items.Where(i => i.SprintKey == sprint.Key && i.Kind == WorkItemKind.Story).Sum(i => i.EstimatePoints);
+                if (points > sprint.CapacityPoints)
+                    throw new ArgumentException($"Sprint {sprint.Key} is over capacity ({points} of {sprint.CapacityPoints} story points).");
+            }
         }
         foreach (var item in items)
         {

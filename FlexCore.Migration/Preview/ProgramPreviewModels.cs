@@ -362,6 +362,12 @@ public sealed class ProgramPreviewPane
     /// value is shown as an image. Any other text is shown as the icon itself.
     /// </summary>
     public string? Icon { get; init; }
+
+    /// <summary>
+    /// Drawn in the pane instead of starting <see cref="Launch"/>. Used for a faithful fallback,
+    /// such as a VB6 form rendered from its <c>.frm</c> file when no remote host is configured.
+    /// </summary>
+    public Microsoft.AspNetCore.Components.RenderFragment? Content { get; init; }
 }
 
 /// <summary>Frame-route helpers that do not reference ASP.NET Core types.</summary>

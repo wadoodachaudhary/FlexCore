@@ -1,0 +1,10 @@
+.fx-project-switcher {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 16rem;
+}
+
+.fx-project-switcher-label {
+    font-weight: 700;
+}
