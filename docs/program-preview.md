@@ -15,7 +15,7 @@ builder.Services.AddFlexCoreProgramPreview(options =>
 {
     options.FrameRoutePrefix = ProgramPreviewHttp.DefaultRoutePrefix;
     options.MaxConcurrentSessions = 8;
-    options.MaxSessionsPerOwner = 4;
+    options.MaxSessionsPerOwner = 8; // default. Quote (2) and Customer Desk (3) fit together.
     options.IdleTimeout = TimeSpan.FromMinutes(10);
     options.MaxLifetime = TimeSpan.FromMinutes(30);
     options.DisplayWidth = 800;
@@ -283,6 +283,20 @@ ENTRYPOINT ["dotnet", "YourApp.dll"]
 ```
 
 Add the toolkit packages the migrated programs need. Enable WebSockets (Blazor Server). Turn ARR affinity on, or run a single instance, because a session's frames and input must reach the process that launched it. The page itself still loads when the image is built without these packages; the preview shows the install message.
+
+## Layout, static panes, and language launches
+
+`ProgramPreviewGroup` places panes in a column by default. `Orientation="ProgramPreviewOrientation.Horizontal"` puts them in one row. `ShowOrientationToggle` adds **Side by side** and **Stack** on the group toolbar; the choice stays until the bound `Orientation` changes.
+
+A pane with `Content` set is drawn in the group and is not started as a process. That is the fallback when a legacy program cannot run on this host, for example a VB6 form parsed by `Vb6FormParser` and drawn by `Vb6FormView`.
+
+`LanguageLaunch.JavaSources` compiles the named sources with `javac` and runs `java`. `LanguageLaunch.PythonScript` runs `python3` after checking that a module imports. Both use the server `PATH`. If the tool is missing, the process prints an install note and exits.
+
+## Offscreen painting on macOS
+
+A launch with `Offscreen = true` paints without Xvfb when the host is macOS, or when `xvfb` and `xdotool` are not installed. Linux keeps the virtual display when those tools exist. No Screen Recording permission and no extra preview package are required. Java paints a headless `BufferedImage`, Qt uses the `offscreen` platform plugin that ships with Qt, and an FLTK program can draw into `Fl_Image_Surface`.
+
+The host sets `FLEXCORE_PREVIEW=offscreen` and `FLEXCORE_PREVIEW_FRAME` to a file path. The program writes an `FCFR` frame (width, height, packed RGB24) and reads stdin lines: `move`, `down`, `up`, `wheel`, `key`, and `text`. Pointer coordinates are pixels in that frame. Java paints a headless `BufferedImage`, Qt grabs the widget under `QT_QPA_PLATFORM=offscreen`, and FLTK draws into `Fl_Image_Surface`. On X11 that pixmap is allocated on the current `DISPLAY` (the host keeps `XAUTHORITY` pointed at the operator's cookie, because the preview `HOME` is private); the window is not mapped. macOS FLTK uses a Quartz bitmap and does not need `DISPLAY`. Set `FLEXCORE_PREVIEW_FORCE_OFFSCREEN=1` to exercise this path on a machine that also has Xvfb. The private preview `HOME` does not hide the operator's Python user site: the host puts that directory on `PYTHONPATH` unless the launch already set one.
 
 ## Try the harness
 

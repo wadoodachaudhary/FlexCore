@@ -357,6 +357,54 @@ internal static class ProgramPreviewChecks
             if (xwdSession.SessionId is not null && xwdSession.Token is not null)
                 xwdHost.Release(xwdSession.SessionId, xwdSession.Token);
         }
+
+        await ExerciseOffscreen(check);
+    }
+
+    private static async Task ExerciseOffscreen(Action<bool, string> check)
+    {
+        var withDisplay = new ProgramPreviewCapability { CanRunGui = true };
+        var withoutDisplay = new ProgramPreviewCapability { CanRunGui = false, Message = "no display" };
+        var capable = new ProgramLaunch { FileName = "python3", Offscreen = true, Kind = ProgramPreviewKind.Gui };
+        check(OffscreenPreview.Use(capable, withDisplay.CanRunGui, macOS: true), "macOS paints an offscreen-capable program without a virtual display");
+        check(!OffscreenPreview.Use(capable, withDisplay.CanRunGui, macOS: false), "Linux keeps Xvfb when the virtual display is installed");
+        check(OffscreenPreview.Use(capable, withoutDisplay.CanRunGui, macOS: false), "a machine without Xvfb uses offscreen painting");
+        check(!OffscreenPreview.Use(new ProgramLaunch { FileName = "python3", Kind = ProgramPreviewKind.Gui }, withoutDisplay.CanRunGui, macOS: true), "a program that cannot paint offscreen still explains the missing display");
+        var roundTrip = OffscreenFrame.Decode(OffscreenFrame.Encode([10, 20, 30, 40, 50, 60], 2, 1));
+        check(roundTrip.Width == 2 && roundTrip.Rgb.SequenceEqual(new byte[] { 10, 20, 30, 40, 50, 60 }), "an offscreen frame round-trips RGB pixels");
+        check(OffscreenPreview.Format(new ProgramPreviewInput { Kind = ProgramPreviewInputKind.MouseUp, X = 4, Y = 9, Button = 0 }) == "up 4 9 0", "offscreen input is one stdin line");
+
+        await using var hostServices = Build(options =>
+        {
+            options.XvfbPath = "/no/such/flexcore-xvfb";
+            options.XdotoolPath = "/no/such/flexcore-xdotool";
+            options.FfmpegPath = "/no/such/flexcore-ffmpeg";
+            options.XwdPath = "/no/such/flexcore-xwd";
+        });
+        var host = hostServices.GetRequiredService<IProgramPreviewHost>();
+        var refused = await host.StartAsync(new ProgramLaunch { FileName = "python3", Arguments = [Fixture("offscreen_form.py")], Kind = ProgramPreviewKind.Gui });
+        check(refused.Snapshot.Status == ProgramPreviewStatus.Unavailable, "offscreen painting is not used unless the program opts in");
+        var session = await host.StartAsync(new ProgramLaunch
+        {
+            FileName = "python3",
+            Arguments = [Fixture("offscreen_form.py")],
+            WorkingDirectory = AppContext.BaseDirectory,
+            Kind = ProgramPreviewKind.Gui,
+            Offscreen = true
+        });
+        try
+        {
+            check(session.Snapshot.Status == ProgramPreviewStatus.Running, "an offscreen program runs without Xvfb: " + session.Snapshot.StatusText + " " + session.Snapshot.ErrorText);
+            await WaitForColor(host, session, 4, 4, 255, 0, 0);
+            await Click(host, session, 4, 4);
+            await WaitForColor(host, session, 4, 4, 0, 128, 0);
+            check(true, "an offscreen click changes the painted frame");
+        }
+        finally
+        {
+            if (session.SessionId is not null && session.Token is not null)
+                host.Release(session.SessionId, session.Token);
+        }
     }
 
     private static async Task ExerciseWeb(IProgramPreviewHost host, Action<bool, string> check)

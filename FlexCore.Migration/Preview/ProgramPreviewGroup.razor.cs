@@ -12,6 +12,8 @@ public partial class ProgramPreviewGroup
     private ProgramPreviewWindow[] _windows = [];
     private bool _busy;
     private bool _autoStarted;
+    private ProgramPreviewOrientation _orientation = ProgramPreviewOrientation.Vertical;
+    private ProgramPreviewOrientation _incoming = ProgramPreviewOrientation.Vertical;
 
     [Parameter] public IReadOnlyList<ProgramPreviewPane> Items { get; set; } = [];
     [Parameter] public string? OwnerKey { get; set; }
@@ -27,8 +29,14 @@ public partial class ProgramPreviewGroup
     /// <summary>Vertical stacks every pane. Horizontal keeps the wrapping row.</summary>
     [Parameter] public ProgramPreviewOrientation Orientation { get; set; } = ProgramPreviewOrientation.Vertical;
 
+    /// <summary>Shows Side by side and Stack. The user's choice stays until <see cref="Orientation"/> changes.</summary>
+    [Parameter] public bool ShowOrientationToggle { get; set; }
+
+    [Parameter] public EventCallback<ProgramPreviewOrientation> OrientationChanged { get; set; }
+
     private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
-    private string OrientationCss => Orientation == ProgramPreviewOrientation.Horizontal ? "horizontal" : "vertical";
+    private bool SideBySide => _orientation == ProgramPreviewOrientation.Horizontal;
+    private string OrientationCss => SideBySide ? "horizontal" : "vertical";
     private string ChromeCss => Chrome switch
     {
         ProgramPreviewChrome.Windows => "windows",
@@ -45,6 +53,17 @@ public partial class ProgramPreviewGroup
         var count = Items?.Count ?? 0;
         if (_windows.Length != count)
             _windows = new ProgramPreviewWindow[count];
+        if (Orientation != _incoming)
+        {
+            _incoming = Orientation;
+            _orientation = Orientation;
+        }
+    }
+
+    private async Task ChooseOrientation(ProgramPreviewOrientation next)
+    {
+        _orientation = next;
+        await OrientationChanged.InvokeAsync(next);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

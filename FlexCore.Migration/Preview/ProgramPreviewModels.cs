@@ -83,6 +83,13 @@ public sealed class ProgramLaunch
     /// <summary>Fixed TCP port for a started web server. When null, the host allocates one.</summary>
     public int? Port { get; init; }
 
+    /// <summary>
+    /// The program can paint its own window and read pointer and key events when no virtual display exists.
+    /// macOS uses that path. Linux keeps Xvfb when <c>xvfb</c> and <c>xdotool</c> are installed.
+    /// Set <c>FLEXCORE_PREVIEW=offscreen</c> and write <c>FLEXCORE_PREVIEW_FRAME</c>. See <see cref="OffscreenPreview"/>.
+    /// </summary>
+    public bool Offscreen { get; init; }
+
     /// <summary>Throws <see cref="ArgumentException"/> when the launch cannot be started.</summary>
     public void Validate()
     {
@@ -139,7 +146,7 @@ public sealed class ProgramLaunch
 public sealed class ProgramPreviewOptions
 {
     public int MaxConcurrentSessions { get; set; } = 8;
-    public int MaxSessionsPerOwner { get; set; } = 4;
+    public int MaxSessionsPerOwner { get; set; } = 8;
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(10);
     public TimeSpan MaxLifetime { get; set; } = TimeSpan.FromMinutes(30);
     public TimeSpan FrameInterval { get; set; } = TimeSpan.FromMilliseconds(200);
@@ -362,6 +369,12 @@ public sealed class ProgramPreviewPane
     /// value is shown as an image. Any other text is shown as the icon itself.
     /// </summary>
     public string? Icon { get; init; }
+
+    /// <summary>
+    /// Drawn in the pane instead of starting <see cref="Launch"/>. Used for a faithful fallback,
+    /// such as a VB6 form rendered from its <c>.frm</c> file when no remote host is configured.
+    /// </summary>
+    public Microsoft.AspNetCore.Components.RenderFragment? Content { get; init; }
 }
 
 /// <summary>Frame-route helpers that do not reference ASP.NET Core types.</summary>

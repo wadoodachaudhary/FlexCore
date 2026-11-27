@@ -1,7 +1,17 @@
 namespace Fx.ControlKit.WorkTracking;
 
 public sealed record WorkAgentProfile(string Id, string Provider, string Model, string Instructions = "", int MaxOutputTokens = 8192, bool AllowContextSharing = false);
-public sealed record WorkSprint(string Key, string Name, string Goal, int Order, int DurationDays);
+/// <summary>
+/// One sprint. <paramref name="StartsOn"/> and <paramref name="CapacityPoints"/> are optional so older boards still load.
+/// Capacity is story points. Zero means the board did not record a limit.
+/// </summary>
+public sealed record WorkSprint(string Key, string Name, string Goal, int Order, int DurationDays, DateOnly? StartsOn = null, int CapacityPoints = 0)
+{
+    /// <summary>Inclusive date span when <see cref="StartsOn"/> is set, otherwise the duration in days.</summary>
+    public string Schedule => StartsOn is { } start
+        ? start.ToString("yyyy-MM-dd") + " – " + start.AddDays(Math.Max(0, DurationDays - 1)).ToString("yyyy-MM-dd")
+        : DurationDays + " days";
+}
 
 /// <summary>An existing application used as read-only integration context, never as additional migration scope.</summary>
 public sealed record WorkApplicationContext

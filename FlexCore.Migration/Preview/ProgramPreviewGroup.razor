@@ -14,6 +14,13 @@
     <div class="fx-preview-group-toolbar">
         <span class="fx-preview-group-title">@GroupLabel</span>
         <span class="fx-preview-group-tools">
+            @if (ShowOrientationToggle)
+            {
+                <span class="fx-preview-group-orient" role="group" aria-label="Pane layout">
+                    <button type="button" class="fx-preview-group-tool" aria-pressed="@SideBySide" @onclick="() => ChooseOrientation(ProgramPreviewOrientation.Horizontal)">Side by side</button>
+                    <button type="button" class="fx-preview-group-tool" aria-pressed="@(!SideBySide)" @onclick="() => ChooseOrientation(ProgramPreviewOrientation.Vertical)">Stack</button>
+                </span>
+            }
             <button type="button" class="fx-preview-group-start" disabled="@(!Enabled || _busy)" @onclick="StartAsync">@StartText</button>
             <button type="button" class="fx-preview-group-tool" disabled="@(!Enabled || _busy)" @onclick="RestartAsync">@RestartText</button>
             <button type="button" class="fx-preview-group-tool" disabled="@(!Enabled)" @onclick="StopAsync">@StopText</button>
@@ -24,16 +31,26 @@
         {
             var paneIndex = index;
             var pane = Items![paneIndex];
-            <ProgramPreviewWindow @key="paneIndex"
-                                  @ref="_windows[paneIndex]"
-                                  Launch="pane.Launch"
-                                  Label="@pane.Label"
-                                  Icon="@pane.Icon"
-                                  Chrome="@(pane.Chrome ?? Chrome)"
-                                  OwnerKey="@EffectiveOwner"
-                                  ShowToolbar="false"
-                                  ShowOutput="true"
-                                  AutoStart="false" />
+            if (pane.Content is not null)
+            {
+                <section class="fx-preview-static" aria-label="@pane.Label">
+                    <header class="fx-preview-static-label">@pane.Label</header>
+                    <div class="fx-preview-static-body">@pane.Content</div>
+                </section>
+            }
+            else
+            {
+                <ProgramPreviewWindow @key="paneIndex"
+                                      @ref="_windows[paneIndex]"
+                                      Launch="pane.Launch"
+                                      Label="@pane.Label"
+                                      Icon="@pane.Icon"
+                                      Chrome="@(pane.Chrome ?? Chrome)"
+                                      OwnerKey="@EffectiveOwner"
+                                      ShowToolbar="false"
+                                      ShowOutput="true"
+                                      AutoStart="false" />
+            }
         }
     </div>
 </div>

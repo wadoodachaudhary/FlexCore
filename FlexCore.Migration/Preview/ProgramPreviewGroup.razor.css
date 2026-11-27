@@ -100,3 +100,36 @@
 .fx-preview-group[data-orientation="horizontal"] .fx-preview-group-panes {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
+
+.fx-preview-group-orient {
+    display: inline-flex;
+    gap: 4px;
+    margin-right: 4px;
+}
+
+.fx-preview-group-orient .fx-preview-group-tool[aria-pressed="true"] {
+    border-color: #1f4f8a;
+    background: #e7f0fb;
+    color: #1f4f8a;
+}
+
+.fx-preview-static {
+    min-width: 0;
+    background: #d4d0c8;
+    border: 2px solid #fff;
+    box-shadow: inset -1px -1px 0 #404040, 1px 1px 0 #000;
+}
+
+.fx-preview-static-label {
+    margin: 0;
+    padding: 4px 8px;
+    background: #000080;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.fx-preview-static-body {
+    padding: 8px;
+    overflow: auto;
+}

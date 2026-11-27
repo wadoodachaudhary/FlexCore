@@ -49,6 +49,9 @@ internal sealed class PreviewSession : IDisposable
     private int _inputsThisWindow;
     private int _toolFailures;
     private int _disposed;
+    private bool _offscreen;
+    private string? _framePath;
+    private long _frameFileStamp;
 
     public PreviewSession(ProgramLaunch launch, ProgramPreviewKind kind, string? ownerKey, ProgramPreviewOptions options, ProgramPreviewCapability capability)
     {
@@ -150,6 +153,8 @@ internal sealed class PreviewSession : IDisposable
                 StartConsole();
             else if (Kind == ProgramPreviewKind.Web)
                 await StartWebAsync(token).ConfigureAwait(false);
+            else if (OffscreenPreview.Use(_launch, _capability.CanRunGui, OperatingSystem.IsMacOS()))
+                await StartOffscreenAsync(token).ConfigureAwait(false);
             else
                 await StartGuiAsync(token).ConfigureAwait(false);
             var channel = _inputs;
@@ -288,6 +293,122 @@ internal sealed class PreviewSession : IDisposable
         try { _cts.Dispose(); } catch { }
         try { Directory.Delete(Home, recursive: true); } catch { }
         _mutex.Dispose();
+    }
+
+    private async Task StartOffscreenAsync(CancellationToken cancellationToken)
+    {
+        _offscreen = true;
+        _framePath = Path.Combine(Home, "frame.fcfr");
+        _app = StartText(OffscreenProcess(), userVisible: true);
+        _stdin = new StreamWriter(_app.StandardInput.BaseStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true };
+        _processId = _app.Id;
+        _capture = Task.Run(() => CaptureOffscreenAsync(_cts.Token));
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_app.HasExited)
+                throw new InvalidOperationException($"The program exited ({_app.ExitCode}). {FirstDetail()}");
+            if (TryReadOffscreenFrame()) return;
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private ProcessStartInfo OffscreenProcess()
+    {
+        var psi = new ProcessStartInfo(_launch.FileName!)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true
+        };
+        if (!string.IsNullOrEmpty(_launch.WorkingDirectory))
+            psi.WorkingDirectory = _launch.WorkingDirectory;
+        foreach (var argument in _launch.Arguments)
+            psi.ArgumentList.Add(argument);
+        psi.Environment[OffscreenPreview.ModeVariable] = OffscreenPreview.ModeValue;
+        psi.Environment[OffscreenPreview.FrameVariable] = _framePath;
+        psi.Environment[OffscreenPreview.WidthVariable] = _options.DisplayWidth.ToString();
+        psi.Environment[OffscreenPreview.HeightVariable] = _options.DisplayHeight.ToString();
+        psi.Environment["QT_QPA_PLATFORM"] = "offscreen";
+        if (_launch.Environment is not null)
+        {
+            foreach (var pair in _launch.Environment)
+            {
+                if (pair.Value is null) psi.Environment.Remove(pair.Key);
+                else psi.Environment[pair.Key] = pair.Value;
+            }
+        }
+        PreviewPythonSite.Apply(psi);
+        var home = Path.Combine(Home, "tmp");
+        psi.Environment["HOME"] = Home;
+        psi.Environment["TMPDIR"] = home;
+        psi.Environment["TMP"] = home;
+        psi.Environment["TEMP"] = home;
+        // Qt is pinned to its offscreen plugin above, and a Java launch adds the headless
+        // flag when this mode is set, so neither opens a window. FLTK on X11 still needs
+        // the current DISPLAY to allocate the image-surface pixmap; it does not map a
+        // window in this mode. macOS FLTK draws into a Quartz bitmap and ignores DISPLAY.
+        // The private HOME would hide ~/.Xauthority, so point X11 at the operator's cookie.
+        KeepDisplayAuthority(psi);
+        psi.Environment.Remove("WAYLAND_DISPLAY");
+        return psi;
+    }
+
+    private static void KeepDisplayAuthority(ProcessStartInfo start)
+    {
+        var authority = Environment.GetEnvironmentVariable("XAUTHORITY");
+        if (string.IsNullOrEmpty(authority))
+        {
+            var home = Environment.GetEnvironmentVariable("HOME");
+            if (!string.IsNullOrEmpty(home))
+                authority = Path.Combine(home, ".Xauthority");
+        }
+        if (!string.IsNullOrEmpty(authority) && File.Exists(authority))
+            start.Environment["XAUTHORITY"] = authority;
+    }
+
+    private static long FrameStamp(byte[] bytes)
+    {
+        unchecked
+        {
+            long hash = bytes.Length;
+            for (var index = 0; index < bytes.Length; index += 64)
+                hash = hash * 131 + bytes[index];
+            return hash;
+        }
+    }
+
+    private async Task CaptureOffscreenAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                TryReadOffscreenFrame();
+                await Task.Delay(_options.FrameInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private bool TryReadOffscreenFrame()
+    {
+        var path = _framePath;
+        if (path is null || !File.Exists(path)) return false;
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var stamp = FrameStamp(bytes);
+            if (stamp == _frameFileStamp && Volatile.Read(ref _frameVersion) != 0) return true;
+            var image = OffscreenFrame.Decode(bytes);
+            _frameFileStamp = stamp;
+            Publish(image.Rgb, image.Width, image.Height);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private async Task StartGuiAsync(CancellationToken cancellationToken)
@@ -670,6 +791,11 @@ internal sealed class PreviewSession : IDisposable
 
     private async Task WriteGuiAsync(ProgramPreviewInput input, CancellationToken cancellationToken)
     {
+        if (_offscreen)
+        {
+            await WriteOffscreenAsync(input, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         var x = Math.Clamp(input.X, 0, Math.Max(0, _options.DisplayWidth - 1));
         var y = Math.Clamp(input.Y, 0, Math.Max(0, _options.DisplayHeight - 1));
         switch (input.Kind)
@@ -714,6 +840,18 @@ internal sealed class PreviewSession : IDisposable
         }
         if (KeyName(key) is { } named)
             await XdoAsync(cancellationToken, "key", "--delay", "0", Combo(input, named)).ConfigureAwait(false);
+    }
+
+    private async Task WriteOffscreenAsync(ProgramPreviewInput input, CancellationToken cancellationToken)
+    {
+        var line = OffscreenPreview.Format(input);
+        if (line.Length == 0 || _stdin is null) return;
+        try
+        {
+            await _stdin.WriteLineAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await _stdin.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
     }
 
     private async Task WriteConsoleAsync(ProgramPreviewInput input, CancellationToken cancellationToken)
@@ -804,6 +942,7 @@ internal sealed class PreviewSession : IDisposable
                 else psi.Environment[pair.Key] = pair.Value;
             }
         }
+        PreviewPythonSite.Apply(psi);
         if (!gui) return psi;
         var temp = Path.Combine(Home, "tmp");
         psi.Environment["HOME"] = Home;
