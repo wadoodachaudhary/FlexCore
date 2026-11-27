@@ -1,0 +1,523 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@implements IAsyncDisposable
+
+@using System.Globalization
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-live-root @ThemeClass">
+        <div class="fx-live-bar">
+            <span class="fx-live-title">@Title</span>
+            @if (!string.IsNullOrWhiteSpace(Tenant))
+            {
+                <span class="fx-live-muted">Database: <strong>@Tenant</strong></span>
+            }
+            <span class="fx-live-spacer"></span>
+            <span class="fx-live-label">Window</span>
+            @foreach (var minutes in WindowChoices)
+            {
+                var m = minutes;
+                <ButtonControl CssClass="@PillCss(_windowMinutes == m)" Tag="@($"fx-live-window-{m}")" OnClick="() => SetWindow(m)">@WindowLabel(m)</ButtonControl>
+            }
+            <span class="fx-live-label">Refresh</span>
+            @foreach (var seconds in RefreshChoices)
+            {
+                var s = seconds;
+                <ButtonControl CssClass="@PillCss(_refreshSeconds == s)" Tag="@($"fx-live-refresh-{s}")" OnClick="() => SetRefresh(s)">@(s == 0 ? "Off" : s + "s")</ButtonControl>
+            }
+            <ButtonControl CssClass="fx-live-pill" Tag="fx-live-refresh-now" OnClick="RefreshNowAsync">Refresh now</ButtonControl>
+            <span class="fx-live-muted">Updated @_updated.ToLocalTime().ToString("HH:mm:ss")</span>
+        </div>
+
+        @if (_error is not null)
+        {
+            <AlertControl Severity="AlertSeverity.Warning">The live figures could not be refreshed: @_error</AlertControl>
+        }
+
+        <div class="fx-live-scroll">
+            <div class="fx-live-section">Users and server</div>
+            <div class="fx-live-kpis">
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Users signed in</div>
+                    <div class="fx-live-kpi-value">@_userCount.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">@_usersSub</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Memory used</div>
+                    <div class="fx-live-kpi-value">@Bytes(_process.WorkingSetBytes)</div>
+                    <div class="fx-live-kpi-sub">Managed heap @Bytes(_process.ManagedHeapBytes) · machine @_process.MachineMemoryPercent.ToString("0")% of @Bytes(_process.MachineMemoryBytes)</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Processor</div>
+                    <div class="@ValueCss(_process.CpuPercent >= 80)">@_process.CpuPercent.ToString("0.0")%</div>
+                    <div class="fx-live-kpi-sub">This process, all @Environment.ProcessorCount cores · collector pauses @_process.GcPausePercent.ToString("0.00")%</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Threads</div>
+                    <div class="@ValueCss(_process.ThreadPoolQueued > 50)">@_process.ThreadPoolThreads.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">Pool threads · @_process.ThreadPoolQueued.ToString("N0") work items waiting · @_process.Threads.ToString("N0") threads in all</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Running since</div>
+                    <div class="fx-live-kpi-value">@Span(_process.Uptime)</div>
+                    <div class="fx-live-kpi-sub">Collections: @_process.Gen0Collections.ToString("N0") / @_process.Gen1Collections.ToString("N0") / @_process.Gen2Collections.ToString("N0") (gen 0 / 1 / 2)</div>
+                </CardControl>
+            </div>
+
+            <div class="fx-live-section">Database now</div>
+            <div class="fx-live-kpis">
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Connections open</div>
+                    <div class="fx-live-kpi-value">@_sql.OpenConnections.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">Peak @_sql.PeakOpenConnections.ToString("N0") · @_sql.ConnectionsOpened.ToString("N0") opened, @_sql.ConnectionFailures.ToString("N0") failed in the window</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Queries running</div>
+                    <div class="fx-live-kpi-value">@_sql.RunningStatements.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">Sent and not yet answered · peak @FlexSqlLiveMeter.PeakRunningStatements.ToString("N0")</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Database load</div>
+                    <div class="@ValueCss(_sql.LoadPercent >= 80)">@_sql.LoadPercent.ToString("0.0")%</div>
+                    <div class="fx-live-kpi-sub">Time waiting on the database · 100% = one query running all the time</div>
+                </CardControl>
+                @if (_server is not null)
+                {
+                    <CardControl CssClass="fx-live-card" Elevation="1">
+                        <div class="fx-live-kpi-label">Server sessions</div>
+                        <div class="@ValueCss((_server.BlockedRequests ?? 0) > 0)">@Number(_server.Sessions)</div>
+                        <div class="fx-live-kpi-sub">@Number(_server.RunningRequests) requests running · @Number(_server.BlockedRequests) blocked@(_server.ServerCpuPercent is int cpu ? $" · server processor {cpu}%" : "")</div>
+                    </CardControl>
+                    <CardControl CssClass="fx-live-card" Elevation="1">
+                        <div class="fx-live-kpi-label">Data size</div>
+                        <div class="fx-live-kpi-value">@(_server.DataBytes is long d ? Bytes(d) : "n/a")</div>
+                        <div class="fx-live-kpi-sub">@Number(_server.Rows) rows in @Number(_server.Tables) tables · log @(_server.LogBytes is long l ? Bytes(l) : "n/a")@(_server.Note.Length > 0 ? " · " + _server.Note : "")</div>
+                    </CardControl>
+                }
+            </div>
+
+            <div class="fx-live-section">Database activity, last @WindowLabel(_windowMinutes)</div>
+            <div class="fx-live-kpis">
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Queries run</div>
+                    <div class="fx-live-kpi-value">@_sql.Statements.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">@_sql.Reads.ToString("N0") reads · @_sql.Writes.ToString("N0") updates · @_sql.PerMinute.ToString("N1") a minute</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Rows retrieved</div>
+                    <div class="fx-live-kpi-value">@_sql.RowsRead.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">@(_sql.Reads == 0 ? "No reads" : (_sql.RowsRead / (double)_sql.Reads).ToString("N1") + " rows a read")</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Rows changed</div>
+                    <div class="fx-live-kpi-value">@_sql.RowsAffected.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">Inserted, updated or deleted · @_sql.Commits.ToString("N0") commits, @_sql.Rollbacks.ToString("N0") rollbacks</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Data received</div>
+                    <div class="fx-live-kpi-value">@Bytes(_sql.BytesReceived)</div>
+                    <div class="fx-live-kpi-sub">Sent @Bytes(_sql.BytesSent) · counted when a connection closes</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Response time</div>
+                    <div class="@ValueCss(_sql.P95Ms >= FlexSqlRecorder.SlowStatementMs)">@_sql.AverageMs.ToString("N1") ms</div>
+                    <div class="fx-live-kpi-sub">Average · median @_sql.MedianMs.ToString("N0") ms · 95% under @_sql.P95Ms.ToString("N0") ms · slowest @_sql.MaxMs.ToString("N0") ms</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Slow queries</div>
+                    <div class="@ValueCss(_sql.Slow > 0)">@_sql.Slow.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">@FlexSqlRecorder.SlowStatementMs.ToString("N0") ms or more</div>
+                </CardControl>
+                <CardControl CssClass="fx-live-card" Elevation="1">
+                    <div class="fx-live-kpi-label">Failed</div>
+                    <div class="@ValueCss(_sql.Errors > 0)">@_sql.Errors.ToString("N0")</div>
+                    <div class="fx-live-kpi-sub">Statements and connections that failed</div>
+                </CardControl>
+            </div>
+
+            <div class="fx-live-charts">
+                <CardControl Title="Queries a minute" CssClass="fx-live-card fx-live-chart" Elevation="1">
+                    <ChartControl Type="ChartType.StackedBar" Series="@_queriesSeries" Height="190px" />
+                </CardControl>
+                <CardControl Title="Response time a minute (ms)" CssClass="fx-live-card fx-live-chart" Elevation="1">
+                    <ChartControl Type="ChartType.MultiLine" Series="@_latencySeries" Height="190px" />
+                </CardControl>
+                <CardControl Title="Rows a minute" CssClass="fx-live-card fx-live-chart" Elevation="1">
+                    <ChartControl Type="ChartType.StackedBar" Series="@_rowsSeries" Height="190px" />
+                </CardControl>
+                <CardControl Title="Memory (MB) and processor (%)" CssClass="fx-live-card fx-live-chart" Elevation="1">
+                    <ChartControl Type="ChartType.MultiLine" Series="@_processSeries" Height="190px" />
+                </CardControl>
+            </div>
+
+            <div class="fx-live-grids">
+                <CardControl Title="@($"Users signed in ({_sessions.Count})")" CssClass="fx-live-card" Elevation="1">
+                    @if (_sessions.Count == 0)
+                    {
+                        <div class="fx-live-empty">@(_hasSessionProvider ? "No user is signed in." : "The application does not list its sign-ins; the count above is the users seen in the window.")</div>
+                    }
+                    else
+                    {
+                        <GridControl TValue="FlexUserSession" Tag="fx-live-users-grid" DataSource="@_sessions" AllowSorting="true" AllowResizing="true"
+                                     Height="230px" WidthMode="GridWidthMode.FillAvailable">
+                            <GridColumnsBase>
+                                <GridColumn Field="@nameof(FlexUserSession.UserId)" HeaderText="User" Width="130px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FlexUserSession.Tenant)" HeaderText="Database" Width="170px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FlexUserSession.SignedInUtc)" HeaderText="Signed in (UTC)" Width="145px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FlexUserSession.LastActivityUtc)" HeaderText="Last activity (UTC)" Width="145px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FlexUserSession.Screen)" HeaderText="Screen" Width="170px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FlexUserSession.Client)" HeaderText="Client" Width="200px" AllowEditing="false" />
+                            </GridColumnsBase>
+                        </GridControl>
+                    }
+                </CardControl>
+
+                <CardControl Title="@($"Busiest tables since {TablesSince(DateTime.UtcNow).ToLocalTime():HH:mm}")" CssClass="fx-live-card" Elevation="1">
+                    <GridControl TValue="FlexSqlRollupSummary" Tag="fx-live-tables-grid" DataSource="@_tables" AllowSorting="true" AllowResizing="true"
+                                 Height="230px" WidthMode="GridWidthMode.FillAvailable">
+                        <GridColumnsBase>
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.Name)" HeaderText="Table" Width="220px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.Calls)" HeaderText="Queries" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.Reads)" HeaderText="Reads" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.Writes)" HeaderText="Updates" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.RowsRead)" HeaderText="Rows retrieved" Width="110px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.RowsAffected)" HeaderText="Rows changed" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.AverageMs)" HeaderText="Avg ms" Width="80px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.MaxMs)" HeaderText="Slowest ms" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(FlexSqlRollupSummary.Errors)" HeaderText="Failed" Width="70px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        </GridColumnsBase>
+                    </GridControl>
+                </CardControl>
+            </div>
+
+            <CardControl Title="@StatementsTitle" CssClass="fx-live-card" Elevation="1">
+                <div class="fx-live-bar fx-live-bar-inner">
+                    <ButtonControl CssClass="@PillCss(_statementView == "Recent")" Tag="fx-live-statements-recent" OnClick='() => SetStatementView("Recent")'>Latest</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_statementView == "Slow")" Tag="fx-live-statements-slow" OnClick='() => SetStatementView("Slow")'>Slow (@_slowCount)</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_statementView == "Failed")" Tag="fx-live-statements-failed" OnClick='() => SetStatementView("Failed")'>Failed (@_failedCount)</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_statementView == "Slowest")" Tag="fx-live-statements-slowest" OnClick='() => SetStatementView("Slowest")'>Slowest first</ButtonControl>
+                    <span class="fx-live-muted">Slow queries are shaded amber, failed ones red.</span>
+                </div>
+                <GridControl TValue="FlexSqlTelemetryEntry" Tag="fx-live-statements-grid" DataSource="@_statements" AllowSorting="true" AllowResizing="true"
+                             RowCssClassSelector="StatementRowCss" Height="320px" WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Timestamp)" HeaderText="Time" Width="95px" Type="ColumnType.Date" Format="HH:mm:ss.fff" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.StatusLabel)" HeaderText="Status" Width="75px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var q = (FlexSqlTelemetryEntry)context;
+                                    var v = q.HasError ? BadgeVariant.Danger : (q.IsSlow ? BadgeVariant.Warning : BadgeVariant.Success);
+                                }
+                                <BadgeControl Variant="@v" Size="BadgeSize.Small" Text="@q.StatusLabel" />
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.ElapsedMs)" HeaderText="Response ms" Width="100px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.RowCount)" HeaderText="Rows" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.StatementKind)" HeaderText="Kind" Width="85px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.UserId)" HeaderText="User" Width="100px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Screen)" HeaderText="Screen" Width="150px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Tables)" HeaderText="Tables" Width="190px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.SqlPreview)" HeaderText="Statement" Width="420px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.ErrorMessage)" HeaderText="Error" Width="220px" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </CardControl>
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Live activity";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    /// <summary>The tenant (database) shown; empty or "*" shows every tenant.</summary>
+    [Parameter] public string? Tenant { get; set; }
+    /// <summary>Seconds between refreshes when the view opens; 0 = off.</summary>
+    [Parameter] public int RefreshSeconds { get; set; } = 5;
+    [Parameter] public int WindowMinutes { get; set; } = 15;
+
+    private static readonly int[] WindowChoices = [5, 15, 60, 240];
+    private static readonly int[] RefreshChoices = [0, 5, 15, 60];
+    private const int MaxProcessSamples = 90;
+
+    private readonly CancellationTokenSource _stop = new();
+    private Task? _loop;
+    private int _windowMinutes, _refreshSeconds;
+    private bool _started;
+    private string? _lastTenant;
+    private DateTime _updated = DateTime.UtcNow;
+    private string? _error;
+
+    private FlexSqlLiveSummary _sql = FlexSqlLiveSummary.From(Array.Empty<FlexSqlMinute>());
+    private FlexProcessLoad _process = new();
+    private FlexDatabaseServerLoad? _server;
+    private DateTime _serverReadUtc;
+    private List<FlexUserSession> _sessions = new();
+    private bool _hasSessionProvider;
+    private int _userCount;
+    private string _usersSub = string.Empty;
+    private List<FlexSqlRollupSummary> _tables = new();
+    private List<FlexSqlTelemetryEntry> _recent = new(), _statements = new();
+    private string _statementView = "Recent";
+    private int _slowCount, _failedCount;
+    private readonly List<FlexProcessLoad> _processSamples = new();
+
+    private List<ChartSeries> _queriesSeries = new(), _latencySeries = new(), _rowsSeries = new(), _processSeries = new();
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("LiveActivityControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-live-theme-dark",
+        TelemetryTheme.ModernLight => "fx-live-theme-light",
+        _ => "fx-live-theme-vb"
+    };
+
+    private string StatementsTitle => $"Queries, last {WindowLabel(_windowMinutes)} ({_statements.Count:N0} shown)";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_started)
+        {
+            _started = true;
+            _windowMinutes = WindowChoices.Contains(WindowMinutes) ? WindowMinutes : 15;
+            _refreshSeconds = RefreshChoices.Contains(RefreshSeconds) ? RefreshSeconds : 5;
+            _lastTenant = Tenant;
+            await RefreshAsync();
+            _loop = PollAsync();
+        }
+        else if (!string.Equals(_lastTenant, Tenant, StringComparison.OrdinalIgnoreCase))
+        {
+            _lastTenant = Tenant;
+            _server = null;
+            _serverReadUtc = default;
+            await RefreshAsync();
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        var ticks = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_stop.Token))
+            {
+                if (_refreshSeconds == 0 || ++ticks < _refreshSeconds)
+                    continue;
+                ticks = 0;
+                await InvokeAsync(async () =>
+                {
+                    await RefreshAsync();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task RefreshNowAsync()
+    {
+        RecordControlAction("LiveRefresh", Tenant);
+        _serverReadUtc = default;
+        await RefreshAsync();
+    }
+
+    private async Task SetWindow(int minutes)
+    {
+        _windowMinutes = minutes;
+        RecordControlAction("LiveWindowChanged", minutes.ToString(CultureInfo.InvariantCulture));
+        await RefreshAsync();
+    }
+
+    private void SetRefresh(int seconds)
+    {
+        _refreshSeconds = seconds;
+        RecordControlAction("LiveRefreshIntervalChanged", seconds.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private void SetStatementView(string view)
+    {
+        _statementView = view;
+        RecordControlAction("LiveStatementViewChanged", view);
+        BuildStatements();
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var since = now.AddMinutes(-_windowMinutes);
+
+            _process = FlexProcessLoad.Capture();
+            _processSamples.Add(_process);
+            if (_processSamples.Count > MaxProcessSamples)
+                _processSamples.RemoveAt(0);
+
+            var store = Services.GetService(typeof(FlexSqlTelemetryStore)) as FlexSqlTelemetryStore;
+            var minutes = store?.Live.Minutes(Tenant, _windowMinutes, now) ?? new List<FlexSqlMinute>();
+            _sql = FlexSqlLiveSummary.From(minutes);
+            _tables = store is null
+                ? new()
+                : FlexSqlRollupSummary.Group(store.Rollup.Snapshot(TablesSince(now), AllTenants ? null : Tenant), "Table").Take(50).ToList();
+
+            var provider = Services.GetService(typeof(IFlexSqlTelemetryProvider)) as IFlexSqlTelemetryProvider;
+            _recent = (provider?.GetRecentQueries(tenant: AllTenants ? null : Tenant, maxCount: 5_000) ?? Array.Empty<FlexSqlTelemetryEntry>())
+                .Where(q => q.TimestampUtc >= since && q.EventKind == FlexSqlEventKinds.Statement)
+                .ToList();
+            BuildStatements();
+
+            LoadSessions(since);
+            await LoadServerAsync(now);
+            BuildCharts(minutes);
+            _updated = now;
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    // The hourly counters are kept by clock hour: this hour and the one before it.
+    private static DateTime TablesSince(DateTime now) => new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(-1);
+
+    private bool AllTenants => string.IsNullOrWhiteSpace(Tenant) || Tenant == "*";
+
+    private void LoadSessions(DateTime sinceUtc)
+    {
+        var sessions = Services.GetService(typeof(IFlexSessionProvider)) as IFlexSessionProvider;
+        _hasSessionProvider = sessions is not null;
+        if (sessions is not null)
+        {
+            _sessions = sessions.GetSessions(AllTenants ? null : Tenant).OrderBy(s => s.UserId, StringComparer.OrdinalIgnoreCase).ToList();
+            _userCount = _sessions.Select(s => s.UserId).Where(u => u.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            _usersSub = $"{_sessions.Count:N0} sessions open";
+            return;
+        }
+        _sessions = new();
+        _userCount = _recent.Select(q => q.UserId).Where(u => u.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        _usersSub = "Users seen in the window (the application lists no sign-ins)";
+    }
+
+    // The server's own figures cost a round trip to it, so they are read at most every 30 seconds.
+    private async Task LoadServerAsync(DateTime now)
+    {
+        if (Services.GetService(typeof(IFlexDatabaseLoadProvider)) is not IFlexDatabaseLoadProvider server)
+            return;
+        if (_server is not null && (now - _serverReadUtc).TotalSeconds < 30)
+            return;
+        _serverReadUtc = now;
+        try
+        {
+            _server = await server.GetLoadAsync(AllTenants ? null : Tenant, _stop.Token);
+        }
+        catch (Exception ex)
+        {
+            _server = new FlexDatabaseServerLoad { Note = ex.Message };
+        }
+    }
+
+    private void BuildStatements()
+    {
+        _slowCount = _recent.Count(q => q.IsSlow && !q.HasError);
+        _failedCount = _recent.Count(q => q.HasError);
+        IEnumerable<FlexSqlTelemetryEntry> rows = _statementView switch
+        {
+            "Slow" => _recent.Where(q => q.IsSlow && !q.HasError).OrderByDescending(q => q.TimestampUtc),
+            "Failed" => _recent.Where(q => q.HasError).OrderByDescending(q => q.TimestampUtc),
+            "Slowest" => _recent.OrderByDescending(q => q.ElapsedMs),
+            _ => _recent.OrderByDescending(q => q.TimestampUtc)
+        };
+        _statements = rows.Take(200).ToList();
+    }
+
+    private void BuildCharts(List<FlexSqlMinute> minutes)
+    {
+        var vb = Theme == TelemetryTheme.VBClassic;
+        // At most 60 points: longer windows are shown in steps of several minutes.
+        var step = Math.Max(1, (int)Math.Ceiling(minutes.Count / 60.0));
+        var buckets = minutes.Chunk(step).Select(c => new
+        {
+            Label = c[0].MinuteUtc.ToLocalTime().ToString("HH:mm"),
+            Reads = c.Sum(m => m.Reads) / (double)c.Length,
+            Writes = c.Sum(m => m.Writes) / (double)c.Length,
+            Average = c.Sum(m => m.Statements) == 0 ? 0 : c.Sum(m => m.TotalMs) / (double)c.Sum(m => m.Statements),
+            Max = (double)c.Max(m => m.MaxMs),
+            RowsRead = c.Sum(m => m.RowsRead) / (double)c.Length,
+            RowsAffected = c.Sum(m => m.RowsAffected) / (double)c.Length
+        }).ToList();
+
+        ChartSeries Series(string name, ChartType type, string color, IEnumerable<ChartDataPoint> points) => new(name, type, points, color);
+
+        _queriesSeries = new()
+        {
+            Series("Reads", ChartType.StackedBar, vb ? "#0a246a" : "#3b82f6", buckets.Select(b => new ChartDataPoint(b.Label, Math.Round(b.Reads, 1)))),
+            Series("Updates", ChartType.StackedBar, vb ? "#8b5a00" : "#f59e0b", buckets.Select(b => new ChartDataPoint(b.Label, Math.Round(b.Writes, 1))))
+        };
+        _latencySeries = new()
+        {
+            Series("Average", ChartType.Line, vb ? "#0a246a" : "#3b82f6", buckets.Select(b => new ChartDataPoint(b.Label, Math.Round(b.Average, 1)))),
+            Series("Slowest", ChartType.Line, vb ? "#9c1c1c" : "#f43f5e", buckets.Select(b => new ChartDataPoint(b.Label, b.Max)))
+        };
+        _rowsSeries = new()
+        {
+            Series("Rows retrieved", ChartType.StackedBar, vb ? "#1b5e20" : "#10b981", buckets.Select(b => new ChartDataPoint(b.Label, Math.Round(b.RowsRead, 1)))),
+            Series("Rows changed", ChartType.StackedBar, vb ? "#6a1b9a" : "#a855f7", buckets.Select(b => new ChartDataPoint(b.Label, Math.Round(b.RowsAffected, 1))))
+        };
+        _processSeries = new()
+        {
+            Series("Memory MB", ChartType.Line, vb ? "#0a246a" : "#3b82f6", _processSamples.Select(p => new ChartDataPoint(p.TakenUtc.ToLocalTime().ToString("HH:mm:ss"), Math.Round(p.WorkingSetBytes / 1048576.0, 0)))),
+            Series("Processor %", ChartType.Line, vb ? "#9c1c1c" : "#f43f5e", _processSamples.Select(p => new ChartDataPoint(p.TakenUtc.ToLocalTime().ToString("HH:mm:ss"), p.CpuPercent)))
+        };
+    }
+
+    private static string? StatementRowCss(FlexSqlTelemetryEntry entry, int index) =>
+        entry.HasError ? "fx-live-row-failed" : entry.IsSlow ? "fx-live-row-slow" : null;
+
+    private static string PillCss(bool active) => active ? "fx-live-pill fx-live-pill-active" : "fx-live-pill";
+    private static string ValueCss(bool warn) => warn ? "fx-live-kpi-value fx-live-warn" : "fx-live-kpi-value";
+    private static string WindowLabel(int minutes) => minutes >= 60 ? (minutes / 60) + (minutes == 60 ? " hour" : " hours") : minutes + " minutes";
+    private static string Number(long? value) => value is long v ? v.ToString("N0") : "n/a";
+    private static string Number(int? value) => value is int v ? v.ToString("N0") : "n/a";
+
+    private static string Span(TimeSpan span) =>
+        span.TotalDays >= 1 ? $"{(int)span.TotalDays}d {span.Hours}h" : span.TotalHours >= 1 ? $"{(int)span.TotalHours}h {span.Minutes}m" : $"{span.Minutes}m {span.Seconds}s";
+
+    /// <summary>A byte count in the largest unit that keeps it at 1 or more.</summary>
+    public static string Bytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double value = Math.Max(0, bytes);
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return unit == 0 ? $"{value:N0} B" : $"{value:N1} {units[unit]}";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        if (_loop is not null)
+        {
+            try { await _loop; }
+            catch { }
+        }
+        _stop.Dispose();
+    }
+}

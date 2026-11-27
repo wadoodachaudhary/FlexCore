@@ -249,7 +249,7 @@ public sealed partial class ReportLayoutSession
             if (!_state.PrintedItems.TryGetValue(key, out var evaluated)) return item;
             var element = evaluated.Element.CloneFor(item.Element.SectionId, item.Element.Name); element.Id = item.Element.Id;
             ReportObjectBounds.Of(item.Element).Apply(element);
-            return item with { Element = element, Html = evaluated.Html, TemplateHtml = evaluated.Html, Measurement = -2, DuplicateValue = evaluated.DuplicateValue };
+            return item with { Element = element, Html = evaluated.Html, TemplateHtml = evaluated.Html, Measurement = -2, DuplicateValue = evaluated.DuplicateValue, ParagraphValues = evaluated.ParagraphValues };
         }).ToList();
         return source with { Items = items };
     }
@@ -621,6 +621,7 @@ public sealed partial class ReportLayoutSession
                         ReportDesignerElement element;
                         string html;
                         DuplicateFieldValue? duplicateValue;
+                        string[]? paragraphValues;
                         try
                         {
                             // Resolve field values before their formatting; both share the occurrence's formula cache.
@@ -633,14 +634,14 @@ public sealed partial class ReportLayoutSession
                                 { /* Format records the diagnostic when it evaluates this reference. */ }
                             }
                             element = owner.ApplyObjectConditions(owner.ApplyObjectConditions(original, item.Row), item.Row, true);
-                            (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
+                            (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row, out paragraphValues);
                         }
                         finally { owner._replayingPrint = false; }
                         preparedChildren |= owner.PrepareDeferredSubreport(item with { Element = element });
                         // An inline subreport whose query failed prints the error in place of its records, as in the layout pass.
                         if (element.Kind == "Subreport" && !owner._layout.OnDemandSubreports.ContainsKey(element.Id) && !owner.HasChild(item)
                             && owner.SubreportErrorHtml(element) is { } failed) html = failed;
-                        printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2, DuplicateValue = duplicateValue });
+                        printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2, DuplicateValue = duplicateValue, ParagraphValues = paragraphValues });
                         Store(bandKey, owner);
                     }
                 }

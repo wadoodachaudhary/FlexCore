@@ -132,7 +132,7 @@ public partial class GridControl<TValue>
                 classes.Add("fx-grid-drag-selecting");
             if (IsPagingActive)
                 classes.Add("fx-grid-paged");
-            if (WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
+            if (EffectiveWidthMode == GridWidthMode.FitColumns && WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
                 classes.Add("fx-grid-width-fit-columns");
             if (!string.IsNullOrWhiteSpace(Height))
                 classes.Add("fx-grid-has-height");

@@ -41,6 +41,9 @@ public class DbControl
     private readonly Func<DbConnection> _connectionFactory;
     private readonly ILogger<DbControl> _logger;
 
+    /// <summary>This component's log: every statement is measured through it, and failures and slow statements join the shared log.</summary>
+    public Fx.ControlKit.Logging.FlexDataLog Log { get; } = new(nameof(DbControl));
+
     /// <summary>Logging options for this instance (slow-query threshold, SQL text logging).</summary>
     public DbLoggingOptions LoggingOptions { get; set; } = new();
 
@@ -910,7 +913,7 @@ public class DbControl
 
     private void LogSuccess(string operation, string sql, long elapsedMs, int? rowCount)
     {
-        Fx.ControlKit.Telemetry.FlexSqlRecorder.Statement(nameof(DbControl), sql, string.Empty, elapsedMs, rowCount);
+        Log.Statement(sql, string.Empty, elapsedMs, rowCount);
         var threshold = Math.Max(0, LoggingOptions.SlowQueryThresholdMs);
         if (threshold <= 0 || elapsedMs < threshold) return;
 
@@ -930,7 +933,7 @@ public class DbControl
 
     private void LogError(string operation, string sql, long elapsedMs, Exception ex)
     {
-        Fx.ControlKit.Telemetry.FlexSqlRecorder.Statement(nameof(DbControl), sql, string.Empty, elapsedMs, null, ex);
+        Log.Statement(sql, string.Empty, elapsedMs, null, ex);
         if (LoggingOptions.LogSqlText)
         {
             _logger.LogError(ex,

@@ -11,6 +11,8 @@ public static class FlexSqlEventKinds
     public const string Statement = "Statement";
     public const string ConnectionOpen = "ConnectionOpen";
     public const string ConnectionFailed = "ConnectionFailed";
+    /// <summary>A connection closed; the entry carries what the provider counted on it (bytes, rows).</summary>
+    public const string ConnectionClose = "ConnectionClose";
     public const string TransactionCommit = "TransactionCommit";
     public const string TransactionRollback = "TransactionRollback";
 }
@@ -177,6 +179,10 @@ public sealed class FlexSqlRollupRow
     public long TotalMs { get; set; }
     public long MaxMs { get; set; }
     public long Rows { get; set; }
+    public long RowsRead { get; set; }
+    public long RowsAffected { get; set; }
+    public long BytesReceived { get; set; }
+    public long BytesSent { get; set; }
 }
 
 /// <summary>
@@ -228,6 +234,10 @@ public sealed class FlexSqlRollup
             row.TotalMs += e.ElapsedMs;
             if (e.ElapsedMs > row.MaxMs) row.MaxMs = e.ElapsedMs;
             if (e.RowCount is int rows && rows > 0) row.Rows += rows;
+            row.RowsRead += e.RowsRead;
+            row.RowsAffected += e.RowsAffected;
+            row.BytesReceived += e.BytesReceived ?? 0;
+            row.BytesSent += e.BytesSent ?? 0;
             if (e.HasError)
             {
                 row.Errors++;
@@ -258,7 +268,8 @@ public sealed class FlexSqlRollup
                     HourUtc = row.HourUtc, Tenant = row.Tenant, Screen = row.Screen, UserId = row.UserId, Table = row.Table, Kind = row.Kind,
                     Count = row.Count, Errors = row.Errors, Deadlocks = row.Deadlocks, LockTimeouts = row.LockTimeouts,
                     CommandTimeouts = row.CommandTimeouts, ConnectionFailures = row.ConnectionFailures,
-                    TotalMs = row.TotalMs, MaxMs = row.MaxMs, Rows = row.Rows
+                    TotalMs = row.TotalMs, MaxMs = row.MaxMs, Rows = row.Rows,
+                    RowsRead = row.RowsRead, RowsAffected = row.RowsAffected, BytesReceived = row.BytesReceived, BytesSent = row.BytesSent
                 });
         }
         result.Sort((a, b) => b.HourUtc.CompareTo(a.HourUtc));
@@ -330,6 +341,10 @@ public sealed class FlexSqlRollupSummary
     public long LockTimeouts { get; set; }
     public long CommandTimeouts { get; set; }
     public long ConnectionFailures { get; set; }
+    public long RowsRead { get; set; }
+    public long RowsAffected { get; set; }
+    public long BytesReceived { get; set; }
+    public long BytesSent { get; set; }
 
     private static readonly HashSet<string> WriteKinds = new(StringComparer.Ordinal) { "Insert", "Update", "Delete", "Merge", "Truncate", "Schema" };
 
@@ -353,7 +368,11 @@ public sealed class FlexSqlRollupSummary
             Deadlocks = list.Sum(r => r.Deadlocks),
             LockTimeouts = list.Sum(r => r.LockTimeouts),
             CommandTimeouts = list.Sum(r => r.CommandTimeouts),
-            ConnectionFailures = list.Sum(r => r.ConnectionFailures)
+            ConnectionFailures = list.Sum(r => r.ConnectionFailures),
+            RowsRead = list.Sum(r => r.RowsRead),
+            RowsAffected = list.Sum(r => r.RowsAffected),
+            BytesReceived = list.Sum(r => r.BytesReceived),
+            BytesSent = list.Sum(r => r.BytesSent)
         };
     }
 
@@ -388,6 +407,56 @@ public static class FlexSqlRecorder
     /// <summary>A connection open slower than this is kept as an entry of its own; faster ones are only counted.</summary>
     public static int SlowConnectionMs { get; set; } = 250;
 
+    /// <summary>A statement at or over this is slow: marked in the views and counted in the live meter.</summary>
+    public static int SlowStatementMs { get; set; } = 500;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Data.Common.DbConnection, FlexSqlContext> Tracked = new();
+
+    /// <summary>
+    /// Says who a connection works for, so what the provider counts on it (bytes, rows) is credited to that
+    /// tenant, user and screen when it closes. A data layer calls this when it creates the connection.
+    /// </summary>
+    public static void Track(System.Data.Common.DbConnection connection, FlexSqlContext context)
+    {
+        try { Tracked.AddOrUpdate(connection, context); }
+        catch { }
+    }
+
+    internal static FlexSqlContext? TrackedContext(System.Data.Common.DbConnection? connection) =>
+        connection is not null && Tracked.TryGetValue(connection, out var context) ? context : null;
+
+    /// <summary>
+    /// A connection closed. Counted, not listed: the bytes go to the meters, and the rows too when
+    /// <paramref name="countRows"/> (the connection's statements were recorded without their row counts).
+    /// </summary>
+    public static void ConnectionClosed(string source, string target, long bytesReceived, long bytesSent, long rowsRead, long rowsAffected,
+        bool countRows, FlexSqlContext? context = null)
+    {
+        if (Sink is not FlexSqlTelemetryStore store)
+            return;
+        try
+        {
+            context ??= AmbientContext?.Invoke() ?? new FlexSqlContext();
+            store.Count(new FlexSqlTelemetryEntry
+            {
+                EventKind = FlexSqlEventKinds.ConnectionClose,
+                Source = source,
+                Sql = $"(connection closed: {target})",
+                BytesReceived = bytesReceived,
+                BytesSent = bytesSent,
+                ProviderRowsRead = countRows ? rowsRead : 0,
+                ProviderRowsAffected = countRows ? rowsAffected : 0,
+                Tenant = context.Tenant,
+                UserId = context.UserId,
+                SessionId = context.SessionId,
+                Screen = context.Screen
+            });
+        }
+        catch
+        {
+        }
+    }
+
     public static void Statement(string source, string sql, string parameters, long elapsedMs, int? rowCount,
         Exception? error = null, FlexSqlContext? context = null, bool isBackgroundPoll = false)
     {
@@ -415,7 +484,7 @@ public static class FlexSqlRecorder
             var kind = error is null ? FlexSqlEventKinds.ConnectionOpen : FlexSqlEventKinds.ConnectionFailed;
             var entry = Build(kind, source, $"({(error is null ? "connection open" : "connection failed")}: {target})", string.Empty, elapsedMs, null, error, context, false);
             if (error is null && elapsedMs < SlowConnectionMs && sink is FlexSqlTelemetryStore store)
-                store.Rollup.Add(entry);     // counted, not listed
+                store.Count(entry);     // counted, not listed
             else
                 sink.RecordSql(entry);
         }
@@ -440,7 +509,7 @@ public static class FlexSqlRecorder
         }
     }
 
-    private static FlexSqlTelemetryEntry Build(string kind, string source, string sql, string parameters, long elapsedMs, int? rowCount,
+    internal static FlexSqlTelemetryEntry Build(string kind, string source, string sql, string parameters, long elapsedMs, int? rowCount,
         Exception? error, FlexSqlContext? context, bool isBackgroundPoll)
     {
         context ??= AmbientContext?.Invoke() ?? new FlexSqlContext();

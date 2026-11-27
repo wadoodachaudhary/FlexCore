@@ -1,0 +1,111 @@
+/* ── SQLTableControl ────────────────────────────────────────────── */
+
+.fx-sqltable {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
+    font-size: calc(11px * var(--fx-zoom, 1));
+    color: #212529;
+}
+
+.fx-sqltable-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px;
+    background: #f0f0f0;
+    border: 1px solid #aeb4bd;
+    border-bottom: 0;
+}
+
+.fx-sqltable-search {
+    flex: 0 1 260px;
+    min-width: 120px;
+    display: flex;
+}
+
+.fx-sqltable-search ::deep input {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.fx-sqltable-count {
+    margin-left: auto;
+    color: #495057;
+    white-space: nowrap;
+}
+
+.fx-sqltable-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.fx-sqltable-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.fx-sqltable-pane[hidden] {
+    display: none;
+}
+
+.fx-sqltable-status,
+.fx-sqltable-error {
+    padding: 16px;
+}
+
+.fx-sqltable-error {
+    color: #b02a37;
+    white-space: pre-wrap;
+    overflow: auto;
+}
+
+/* The crosstab fills the body; its table scrolls inside it and its field panel beside it. */
+.fx-sqltable-body ::deep .fx-sqltable-pivot {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-radius: 0;
+}
+
+.fx-sqltable-body ::deep .fx-sqltable-pivot .fx-pivot-content {
+    min-height: 0;
+}
+
+.fx-sqltable-body ::deep .fx-sqltable-pivot .fx-pivot-scroll {
+    min-height: 0;
+}
+
+/* The view switch reads as two plain grey buttons, the chosen one pressed in. */
+.fx-sqltable-toolbar ::deep .fx-segmented {
+    border: 1px solid #aeb4bd;
+    border-radius: 3px;
+    padding: 1px;
+    background: #e4e4e4;
+}
+
+.fx-sqltable-toolbar ::deep .fx-segmented .fx-radio-group {
+    gap: 1px !important;
+}
+
+.fx-sqltable-toolbar ::deep .fx-segmented label {
+    padding: 3px 10px;
+    border-radius: 2px;
+    color: #212529;
+}
+
+.fx-sqltable-toolbar ::deep .fx-segmented label:has(input:checked) {
+    background: #fff;
+    color: #000;
+    box-shadow: inset 0 0 0 1px #8a9099;
+    font-weight: 700;
+}

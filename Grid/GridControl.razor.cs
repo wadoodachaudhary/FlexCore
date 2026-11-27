@@ -274,6 +274,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public GridWidthMode WidthMode { get; set; } = GridWidthMode.FillAvailable;
+    /// <summary>Fits visible columns to the container width using content best fit combined
+    /// with proportional increase or decrease, and marks Page Width checked in the header menu.</summary>
+    [Parameter] public bool PageWidth { get; set; }
+    [Parameter] public EventCallback<bool> PageWidthChanged { get; set; }
+    /// <summary>Sizes the visible columns to their content when the grid first shows them, as the header menu's
+    /// Best Fit All Columns does, so the table is as wide as its columns rather than the page. Fitted once; the
+    /// widths are not saved as the user's. Page Width, when on, takes precedence.</summary>
+    [Parameter] public bool BestFitOnLoad { get; set; }
+    public bool IsPageWidth => _runtimePageWidth ?? PageWidth;
+    internal GridWidthMode EffectiveWidthMode => IsPageWidth ? GridWidthMode.FillAvailable : (_runtimeWidthMode ?? WidthMode);
     [Parameter] public bool EnableViewportSafeSizing { get; set; } = true;
     [Parameter] public string ViewportSafeMaxWidth { get; set; } = "";
     [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
@@ -758,6 +768,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool EnableCellContextMenu { get; set; }
 
     /// <summary>
+    /// A right-click on a data cell or a group header row opens the column menu for that
+    /// column, as a right-click on its header does. Off by default.
+    /// </summary>
+    [Parameter] public bool ColumnMenuOnCells { get; set; }
+
+    /// <summary>
     /// Color used for the vertical column-reorder insertion pipe. Defaults to a
     /// dark grey-black; callers can set any valid CSS color.
     /// </summary>
@@ -1097,7 +1113,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    private bool GridContextMenuPreventDefault => EnableCellContextMenu || PreventDefaultContextMenu || OnContextMenu.HasDelegate;
+    private bool GridContextMenuPreventDefault => EnableCellContextMenu || ColumnMenuOnCells || PreventDefaultContextMenu || OnContextMenu.HasDelegate;
 
     private async Task HandleGridContextMenu(MouseEventArgs e)
     {
@@ -1895,6 +1911,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _deferredScrollGroupedEntryCount = 0;
         }
         SyncPendingColumnStructure();
+        SyncGroupDescriptorCaptions();
         EnsureAutoColumnWidthsBeforeRender();
         UpdateFrozenColumnOffsets();
         PrepareBlazorServerOptimizationForRender();
@@ -2766,6 +2783,86 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// occupy, so content shifts under the user on a window move. 16 stays as the
     /// last-resort value for the window between first paint and first measurement.
     /// </summary>
+    /// <summary>
+    /// Maximum DOM scroll height in pixels allowed for virtual row spacers.
+    /// When total theoretical height (TotalRows × RowHeight) exceeds this threshold,
+    /// FlexGrid activates virtual height scaling so browser element height limits
+    /// (17.8M px in Firefox, 33.5M px in Blink/WebKit) are never exceeded, enabling
+    /// seamless infinite scrolling for 1,000,000+ rows.
+    /// Defaults to 6,000,000 px (the battle-tested standard cross-browser ceiling).
+    /// </summary>
+    [Parameter] public double MaxVirtualScrollHeight { get; set; } = 6_000_000;
+
+    /// <summary>
+    /// Ratio between theoretical pixel height (TotalRows × RowHeight) and DOM scroll height.
+    /// Returns 1.0 for normal datasets; scales proportionally when total rows exceed the browser safe threshold.
+    /// </summary>
+    public double GetVirtualScrollRatio(int totalRows)
+    {
+        if (totalRows <= 0) return 1.0;
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var theoretical = totalRows * rowH;
+        if (MaxVirtualScrollHeight <= 0 || theoretical <= MaxVirtualScrollHeight)
+            return 1.0;
+        return theoretical / MaxVirtualScrollHeight;
+    }
+
+    /// <summary>
+    /// Computes the top spacer height in pixels, applying virtual scroll scaling when total rows exceed the ceiling.
+    /// </summary>
+    private double GetTopSpacerHeight(int startRowIndex, int totalRows)
+    {
+        if (startRowIndex <= 0 || totalRows <= 0) return 0;
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var ratio = GetVirtualScrollRatio(totalRows);
+        if (ratio <= 1.0)
+            return startRowIndex * rowH;
+
+        return (startRowIndex / (double)totalRows) * MaxVirtualScrollHeight;
+    }
+
+    /// <summary>
+    /// Computes the bottom spacer height in pixels, applying virtual scroll scaling when total rows exceed the ceiling.
+    /// </summary>
+    private double GetBottomSpacerHeight(int endRowIndex, int totalRows)
+    {
+        if (totalRows <= 0 || endRowIndex >= totalRows) return 0;
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var ratio = GetVirtualScrollRatio(totalRows);
+        var remaining = Math.Max(0, totalRows - endRowIndex);
+        if (ratio <= 1.0)
+            return remaining * rowH;
+
+        return (remaining / (double)totalRows) * MaxVirtualScrollHeight;
+    }
+
+    /// <summary>
+    /// Smoothly scrolls the virtual viewport to the specified row index (0 to TotalRecords - 1).
+    /// Transparently scales coordinates when virtual height scaling is active for 1,000,000+ rows.
+    /// </summary>
+    public async Task ScrollToRowIndexAsync(int rowIndex)
+    {
+        var total = UsesItemsProvider ? Math.Max(0, _providerTotalCount) : _pageState.TotalRecords;
+        if (total <= 0) return;
+        rowIndex = Math.Clamp(rowIndex, 0, total - 1);
+
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var ratio = GetVirtualScrollRatio(total);
+        var targetTop = ratio > 1.0
+            ? Math.Max(0, ((rowIndex - 2) * rowH) / ratio)
+            : Math.Max(0, (rowIndex - 2) * rowH);
+
+        try
+        {
+            _gridJsModule ??= await ImportGridJsModuleAsync();
+            await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, targetTop);
+        }
+        catch (Exception)
+        {
+            // Best-effort
+        }
+    }
+
     private double _rowHeightPx =>
         RowHeight > 0
             ? Math.Max(MinRowHeight, RowHeight)
@@ -3465,15 +3562,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         }
 
-        if (!UseRowWindowing)
+        if (!UseRowWindowing && !UsesItemsProvider)
             return false;
 
         var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var totalRows = UsesItemsProvider ? Math.Max(0, _providerTotalCount) : _pageState.TotalRecords;
+        var ratio = GetVirtualScrollRatio(totalRows);
+        var effectiveScrollTop = ratio > 1.0 ? scrollTop * ratio : scrollTop;
+
         var visible = (int)Math.Ceiling(clientHeight / rowH);
         if (visible < 1)
             visible = 1;
 
-        var firstVisible = Math.Max(0, (int)Math.Floor(scrollTop / rowH));
+        var firstVisible = Math.Max(0, (int)Math.Floor(effectiveScrollTop / rowH));
         var lastVisibleExclusive = firstVisible + visible;
         var newCount = visible + beforeRows + afterRows;
         var currentEnd = _winStart + _winCount;
@@ -3489,7 +3590,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // PagedData established this count on the authoritative render.
             // Reuse it here so a recovery does not re-enumerate/re-sort a wide,
             // fully materialized production grid before it can unstick itself.
-            var maxStart = Math.Max(0, _pageState.TotalRecords - newCount);
+            var maxStart = Math.Max(0, totalRows - newCount);
             // Move only a bounded continuation. Recentring directly on the
             // requested row can replace 60+ rows at once and recreate the very
             // render stall this recovery is intended to escape.
@@ -3847,6 +3948,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // a session.
     private List<string>? _lastSyncedGroupColumns;
 
+    private void SyncGroupDescriptorCaptions()
+    {
+        if (_groupDescriptors.Count == 0)
+            return;
+
+        var columns = Columns;
+        foreach (var descriptor in _groupDescriptors)
+        {
+            var column = columns.FirstOrDefault(c =>
+                string.Equals(c.Field, descriptor.Field, StringComparison.OrdinalIgnoreCase));
+            if (column != null)
+                descriptor.HeaderText = HeaderColumnDisplay(column);
+        }
+    }
+
     private void SyncGroupDescriptorsFromParameter()
     {
         // Re-sync _groupDescriptors when the host swaps in a new GroupColumns
@@ -4035,6 +4151,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (EnsureAutoColumnWidths())
                 StateHasChanged();
         }
+
+        await SyncPageWidthAfterRenderAsync();
+        await SyncBestFitOnLoadAfterRenderAsync();
 
         // Drag-selection preview handoff: the client-painted preview is
         // removed only AFTER the authoritative selection render has been
@@ -5087,7 +5206,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 });
             }
         }
-
+        if (settings.PageWidth.HasValue)
+        {
+            _runtimePageWidth = settings.PageWidth.Value;
+            _runtimeWidthMode = settings.PageWidth.Value ? GridWidthMode.FillAvailable : GridWidthMode.FitColumns;
+            if (settings.PageWidth.Value)
+                _pageWidthFitPending = true;
+        }
     }
 
     private string ComputeColumnSignature() => string.Join("|", EffectiveColumns.Select(c => c.Field));
@@ -5158,7 +5283,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                          ? (FrozenColumnPosition?)c.EffectiveFrozenPosition
                                          : null),
             HeaderOverrides = _headerOverrides.Count > 0 ? new Dictionary<string, string>(_headerOverrides) : null,
-            GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList()
+            GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList(),
+            PageWidth       = _runtimePageWidth
         };
     }
 
@@ -5182,7 +5308,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                      .ToDictionary(c => c.Field, c => c.EffectiveIsFrozen
                                          ? (FrozenColumnPosition?)c.EffectiveFrozenPosition
                                          : null),
-            GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList()
+            GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList(),
+            PageWidth       = _runtimePageWidth
         };
     }
 
@@ -5246,6 +5373,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _pageState.TotalRecords = dataCount;
             EnsureCurrentPageInRange();
         }
+        if (PageWidth != _lastPageWidthParam)
+        {
+            _lastPageWidthParam = PageWidth;
+            _runtimePageWidth = null;
+            _runtimeWidthMode = null;
+            if (PageWidth)
+                _pageWidthFitPending = true;
+        }
+        if (WidthMode != _lastWidthModeParam)
+        {
+            _lastWidthModeParam = WidthMode;
+            _runtimeWidthMode = null;
+        }
+
         _autoWidthPending = true;
         EnsureThemeInitialized();
         EnsureAdvancedViewInitialized();
@@ -5609,6 +5750,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         ResetToFirstPage();
         LogGridAction("Sorted", $"{col.Field} {(state.SortDirection?.ToString() ?? "Cleared")}", col.Field);
+        RecordGridSortGraph(GetActiveSortDescriptors(), "HeaderClick", col.Field, state.SortDirection?.ToString() ?? "Cleared");
 
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
@@ -5937,6 +6079,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await ReloadItemsAsync();
         else
             await InvokeAsync(StateHasChanged);
+
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            var matchCount = UsesItemsProvider ? SafeTotalRowCount() : GetFilteredRecords().Count();
+            RecordGridFindGraph("SearchBar", text, "AllColumns", "Filter", matchCount, matchCount > 0 ? 1 : 0, SafeTotalRowCount());
+        }
+
         await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
     }
 
@@ -6470,6 +6619,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _focusedGroup = null;
         if (FocusGroupHeaderOnContextMenu)
             _focusedGroupPath = null;
+        if (ColumnMenuOnCells && !EnableCellContextMenu
+            && VisibleColumns.ElementAtOrDefault(cellIndex) is { Field.Length: > 0 } menuColumn)
+            OpenHeaderContextMenu(args, menuColumn.Field);
         if (!IsCellSelectable(item, VisibleColumns.ElementAtOrDefault(cellIndex)))
         {
             // No cell cursor on a blocked cell, but the current RECORD still follows the
@@ -7247,19 +7399,41 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (isRow && _dragAnchorItem != null)
         {
+            var anchorIdx = _dragAnchorRowIndex ?? finalVisibleIndex;
             var item = visible[finalVisibleIndex];
+            var targetIdx = ResolveRowIndex(item, finalVisibleIndex);
             // One range computation, one render, one SelectionChanged.
-            await ContinueRowDragSelectionAsync(item, ResolveRowIndex(item, finalVisibleIndex));
+            await ContinueRowDragSelectionAsync(item, targetIdx);
+            if (_selectedItems.Count > 1)
+            {
+                RecordGridDragGraph(
+                    subKind: "RowRangeSelect",
+                    sourceLabel: $"Row {anchorIdx}",
+                    targetLabel: $"Row {targetIdx}",
+                    selectedRows: _selectedItems.Count,
+                    dragSpanRows: Math.Abs(targetIdx - anchorIdx) + 1);
+            }
         }
         else if (!isRow && _cellDragAnchor.HasValue)
         {
             var anchor = _cellDragAnchor.Value;
             var resolved = ResolveRowIndex(visible[finalVisibleIndex], finalVisibleIndex);
+            var dragColField = VisibleColumns.ElementAtOrDefault(anchor.CellIndex)?.Field;
             _isCellDragSelecting = true;
             SelectSingleCellColumnDragRange(anchor.RowIndex, resolved, anchor.CellIndex);
             _lastSelectedCell = anchor;
             await InvokeAsync(StateHasChanged);
             await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
+            if (_selectedCells.Count > 1)
+            {
+                RecordGridDragGraph(
+                    subKind: "CellRangeSelect",
+                    sourceLabel: $"{dragColField ?? "Cell"}[{anchor.RowIndex}]",
+                    targetLabel: $"{dragColField ?? "Cell"}[{resolved}]",
+                    selectedCells: _selectedCells.Count,
+                    dragSpanRows: Math.Abs(resolved - anchor.RowIndex) + 1,
+                    sourceField: dragColField);
+            }
         }
 
         _suppressNextClickAfterDragSelect = true;
@@ -7838,6 +8012,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _activeCell = (args.NewIndex, _activeCell.Value.CellIndex);
         if (_lastSelectedCell?.RowIndex == oldIndex)
             _lastSelectedCell = (args.NewIndex, _lastSelectedCell.Value.CellIndex);
+
+        LogGridAction("RowReordered", $"Row {oldIndex} -> {args.NewIndex}");
+        RecordGridDragGraph(
+            subKind: "RowReorder",
+            sourceLabel: $"Row {oldIndex}",
+            targetLabel: $"Row {args.NewIndex}",
+            selectedRows: 1,
+            dragSpanRows: Math.Abs(args.NewIndex - oldIndex));
 
         if (EventsRef?.RowReordered.HasDelegate == true)
             await EventsRef.RowReordered.InvokeAsync(args);
@@ -8993,6 +9175,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         LogGridCellSave(col.Field, newValue, targets.Count);
+        if (targets.Count > 1)
+        {
+            RecordGridMultiSelectEditGraph(
+                editMode: "CheckboxMassToggle",
+                field: col.Field,
+                newValue: newValue,
+                selectedRowCount: _selectedItems.Count,
+                selectedCellCount: _selectedCells.Count,
+                targetRowCount: targets.Count,
+                updatedCellCount: targets.Count);
+        }
 
         await EnsureTrailingNewRowIfNeededAsync();
 
@@ -10069,6 +10262,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 ColumnName = field,
                 Value = newValue
             });
+            LogGridCellSave(field, newValue, targets.Count);
+            RecordGridMultiSelectEditGraph(
+                editMode: "BatchCellEditor",
+                field: field,
+                newValue: newValue,
+                selectedRowCount: selectedItemsBeforeCommit.Count,
+                selectedCellCount: selectedCellsBeforeCommit.Count,
+                targetRowCount: targets.Count,
+                updatedCellCount: targets.Count);
         }
         else
         {
@@ -10105,7 +10307,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             if (committedAnyCell)
+            {
                 LogGridCellSave(field, newValue, targets.Count);
+                if (targets.Count > 1 || selectedItemsBeforeCommit.Count > 1 || selectedCellsBeforeCommit.Count > 1)
+                {
+                    RecordGridMultiSelectEditGraph(
+                        editMode: "BatchCellEditor",
+                        field: field,
+                        newValue: newValue,
+                        selectedRowCount: selectedItemsBeforeCommit.Count,
+                        selectedCellCount: selectedCellsBeforeCommit.Count,
+                        targetRowCount: targets.Count,
+                        updatedCellCount: targets.Count);
+                }
+            }
 
             shouldEnsureTrailingNewRow = committedAnyCell;
         }
@@ -12333,12 +12548,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
+            var editableTargets = selectedItems.Where(i => IsCellEditableForItem(i, targetCol)).ToList();
             await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
             {
-                SelectedItems = selectedItems.Where(i => IsCellEditableForItem(i, targetCol)).ToList(),
+                SelectedItems = editableTargets,
                 ColumnName = targetCol.Field,
                 Value = value
             });
+            if (editableTargets.Count > 0)
+            {
+                LogGridCellSave(targetCol.Field, value, editableTargets.Count);
+                if (editableTargets.Count > 1 || selectedItems.Count > 1)
+                {
+                    RecordGridMultiSelectEditGraph(
+                        editMode: "SelectionTypeAhead",
+                        field: targetCol.Field,
+                        newValue: value,
+                        selectedRowCount: selectedItems.Count,
+                        selectedCellCount: _selectedCells.Count,
+                        targetRowCount: editableTargets.Count,
+                        updatedCellCount: editableTargets.Count);
+                }
+            }
         }
         else if (validationItem != null && EditSettingsRef?.AllowEditing == true && EditSettingsRef.Mode == EditMode.Batch)
         {
@@ -12898,6 +13129,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (committedAnyCell)
             {
                 LogGridCellSave(field, newValue, targets.Count);
+                if (targets.Count > 1)
+                {
+                    RecordGridMultiSelectEditGraph(
+                        editMode: "CellSelectionTypeAhead",
+                        field: field,
+                        newValue: newValue,
+                        selectedRowCount: _selectedItems.Count,
+                        selectedCellCount: _selectedCells.Count,
+                        targetRowCount: targets.Count,
+                        updatedCellCount: targets.Count);
+                }
                 await EnsureTrailingNewRowIfNeededAsync();
             }
         }
@@ -12997,6 +13239,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (committedAnyCell)
             {
                 LogGridCellSave(col.Field, sourceValue, targets.Count);
+                if (targets.Count > 1)
+                {
+                    RecordGridMultiSelectEditGraph(
+                        editMode: "CellRangeFill",
+                        field: col.Field,
+                        newValue: sourceValue,
+                        selectedRowCount: _selectedItems.Count,
+                        selectedCellCount: _selectedCells.Count,
+                        targetRowCount: targets.Count,
+                        updatedCellCount: targets.Count);
+                }
                 await EnsureTrailingNewRowIfNeededAsync();
             }
         }
@@ -13181,6 +13434,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (ReorderEffectiveColumn(fromField, targetField, resolvedInsertAfter))
             {
+                LogGridAction("ColumnReordered", $"{fromField} -> {(resolvedInsertAfter ? "after" : "before")} {targetField}", fromField);
+                RecordGridDragGraph(
+                    subKind: "ColumnReorder",
+                    sourceLabel: $"Column:{fromField}",
+                    targetLabel: $"{(resolvedInsertAfter ? "After" : "Before")} {targetField}",
+                    sourceField: fromField,
+                    targetField: targetField);
                 StateHasChanged();
                 await SaveGridSettingsAsync();
                 await FireLayoutChangedAsync();
@@ -13935,20 +14195,330 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var col = CurrentHeaderColumn;
         CloseHeaderContextMenu();
-        if (col != null)
-            await AutoFitCoreAsync(new List<GridColumn> { col });
+        if (col == null)
+            return;
+
+        var modeChanged = await ExitPageWidthForManualSizingAsync();
+        await AutoFitCoreAsync(new List<GridColumn> { col }, persist: true, forceStateRender: modeChanged);
     }
 
     private async Task HeaderMenuBestFitAllColumns()
     {
         CloseHeaderContextMenu();
-        await AutoFitColumnsAsync();
+        var modeChanged = EffectiveWidthMode != GridWidthMode.FitColumns || IsPageWidth;
+        _runtimeWidthMode = GridWidthMode.FitColumns;
+        if (IsPageWidth)
+        {
+            _runtimePageWidth = false;
+            _lastPageWidthSignature = "";
+            _pageWidthFitPending = false;
+            await UnregisterPageWidthObserverAsync();
+            if (PageWidthChanged.HasDelegate)
+                await PageWidthChanged.InvokeAsync(false);
+        }
+        await AutoFitCoreAsync(Columns.Where(IsColumnVisible).ToList(), persist: true, forceStateRender: modeChanged);
     }
 
     private async Task HeaderMenuBestFitToGrid()
     {
         CloseHeaderContextMenu();
+        if (IsPageWidth)
+        {
+            _runtimePageWidth = false;
+            _lastPageWidthSignature = "";
+            _pageWidthFitPending = false;
+            await UnregisterPageWidthObserverAsync();
+            if (PageWidthChanged.HasDelegate)
+                await PageWidthChanged.InvokeAsync(false);
+        }
         await FitColumnsToGridAsync();
+    }
+
+    private async Task HeaderMenuTogglePageWidth()
+    {
+        CloseHeaderContextMenu();
+        await SetPageWidthAsync(!IsPageWidth, persist: true);
+    }
+
+    /// <summary>Enables or disables Page Width mode: when enabled, visible columns are fitted
+    /// to their content and proportionally scaled up or down to fill the container width;
+    /// when disabled, columns size to their best-fit content widths without auto-filling
+    /// remaining grid space.</summary>
+    public async Task SetPageWidthAsync(bool enabled, bool persist = false)
+    {
+        _runtimePageWidth = enabled;
+        _runtimeWidthMode = enabled ? GridWidthMode.FillAvailable : GridWidthMode.FitColumns;
+        if (PageWidthChanged.HasDelegate)
+            await PageWidthChanged.InvokeAsync(enabled);
+
+        if (enabled)
+        {
+            await EnsurePageWidthObserverRegisteredAsync();
+            await FitColumnsToPageWidthCoreAsync(persist: persist, forceStateRender: true);
+            _lastPageWidthSignature = BuildPageWidthSignature();
+            _pageWidthFitPending = false;
+        }
+        else
+        {
+            _lastPageWidthSignature = "";
+            _pageWidthFitPending = false;
+            await UnregisterPageWidthObserverAsync();
+            await AutoFitCoreAsync(Columns.Where(IsColumnVisible).ToList(), persist: persist, forceStateRender: true);
+        }
+    }
+
+    /// <summary>Fits all visible columns to the container's Page Width using content best fit
+    /// combined with proportional increase or decrease.</summary>
+    public Task FitColumnsToPageWidthAsync() => SetPageWidthAsync(true, persist: false);
+
+    [JSInvokable]
+    public async Task OnPageWidthContainerResizedAsync(double containerWidth)
+    {
+        if (!IsPageWidth || _applyingPageWidth)
+            return;
+        await FitColumnsToPageWidthCoreAsync(persist: false);
+    }
+
+    private bool _lastPageWidthParam;
+    private GridWidthMode _lastWidthModeParam = GridWidthMode.FillAvailable;
+    private bool? _runtimePageWidth;
+    private GridWidthMode? _runtimeWidthMode;
+    private bool _pageWidthFitPending;
+    private bool _applyingPageWidth;
+    private bool _pageWidthObserverRegistered;
+    private string _lastPageWidthSignature = "";
+
+    private string BuildPageWidthSignature()
+    {
+        var cols = string.Join("|", VisibleColumns.Select(c =>
+            $"{c.Field}:{HeaderColumnDisplay(c)}:{c.AllowAutoFit}:{c.MinWidth}:{c.MaxWidth}"));
+        return $"{cols}#{_groupDescriptors.Count}#{GetCurrentDataSourceCount()}";
+    }
+
+    private bool _bestFitOnLoadDone;
+
+    // BestFitOnLoad: the header menu's Best Fit All Columns, once the columns are registered, without saving the widths.
+    private async Task SyncBestFitOnLoadAfterRenderAsync()
+    {
+        if (!BestFitOnLoad || _bestFitOnLoadDone || IsPageWidth || _columnUpdateDepth != 0 || !VisibleColumns.Any())
+            return;
+        _bestFitOnLoadDone = true;
+        var modeChanged = EffectiveWidthMode != GridWidthMode.FitColumns;
+        _runtimeWidthMode = GridWidthMode.FitColumns;
+        await AutoFitCoreAsync(Columns.Where(IsColumnVisible).ToList(), persist: false, forceStateRender: modeChanged);
+    }
+
+    private async Task SyncPageWidthAfterRenderAsync()
+    {
+        if (IsPageWidth)
+        {
+            await EnsurePageWidthObserverRegisteredAsync();
+            if (_columnUpdateDepth == 0 && !_applyingPageWidth && VisibleColumns.Any())
+            {
+                var sig = BuildPageWidthSignature();
+                if (_pageWidthFitPending || !string.Equals(sig, _lastPageWidthSignature, StringComparison.Ordinal))
+                {
+                    _lastPageWidthSignature = sig;
+                    _pageWidthFitPending = false;
+                    await FitColumnsToPageWidthCoreAsync(persist: false);
+                }
+            }
+        }
+        else
+        {
+            _lastPageWidthSignature = "";
+            _pageWidthFitPending = false;
+            await UnregisterPageWidthObserverAsync();
+        }
+    }
+
+    private async Task EnsurePageWidthObserverRegisteredAsync()
+    {
+        if (_pageWidthObserverRegistered || !AutoFitUseDomMeasurement)
+            return;
+        try
+        {
+            _gridJsModule ??= await ImportGridJsModuleAsync();
+            _gridDotNetRef ??= DotNetObjectReference.Create(this);
+            await _gridJsModule.InvokeVoidAsync("registerGridPageWidthObserver", _gridHostElement, ColumnAutoFitDomOptions.Grid.Scroller, _gridDotNetRef);
+            _pageWidthObserverRegistered = true;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task UnregisterPageWidthObserverAsync()
+    {
+        if (!_pageWidthObserverRegistered)
+            return;
+        _pageWidthObserverRegistered = false;
+        if (_gridJsModule == null)
+            return;
+        try
+        {
+            await _gridJsModule.InvokeVoidAsync("unregisterGridPageWidthObserver", _gridHostElement);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task<bool> ExitPageWidthForManualSizingAsync()
+    {
+        if (!IsPageWidth)
+            return false;
+
+        foreach (var visibleCol in VisibleColumns)
+        {
+            if (!visibleCol.RuntimeWidth.HasValue)
+            {
+                var px = GetColumnWidthPx(visibleCol);
+                if (px > 0)
+                    visibleCol.RuntimeWidth = px;
+            }
+        }
+
+        _runtimePageWidth = false;
+        _runtimeWidthMode = GridWidthMode.FitColumns;
+        _lastPageWidthSignature = "";
+        _pageWidthFitPending = false;
+        await UnregisterPageWidthObserverAsync();
+        if (PageWidthChanged.HasDelegate)
+            await PageWidthChanged.InvokeAsync(false);
+        return true;
+    }
+
+    private async Task<double> ResolveAvailableDataColumnsWidthAsync()
+    {
+        double available = 0;
+        try
+        {
+            if (AutoFitUseDomMeasurement)
+            {
+                _gridJsModule ??= await ImportGridJsModuleAsync();
+                available = await ColumnAutoFit.MeasureAvailableWidthAsync(_gridJsModule, _gridHostElement, ColumnAutoFitDomOptions.Grid);
+            }
+        }
+        catch
+        {
+        }
+
+        var measured = available > 0;
+        if (available <= 0 && _autoFitCeilingPx > 80)
+            available = _autoFitCeilingPx;
+        if (available <= 0)
+            return 0;
+
+        if (!measured)
+        {
+            if (ShowCheckboxColumn) available -= 50;
+            if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
+            if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
+            if (ShowDetailExpandColumn) available -= 36;
+            if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
+            {
+                foreach (var gcol in GroupedLayoutColumns)
+                {
+                    var w = GetColumnWidthPx(gcol);
+                    available -= w > 0 ? w : ColumnAutoFit.FallbackWidthPx;
+                }
+            }
+        }
+        return Math.Max(0, available);
+    }
+
+    private async Task FitColumnsToPageWidthCoreAsync(bool persist, bool forceStateRender = false)
+    {
+        if (!AllowColumnAutoFit || _applyingPageWidth)
+            return;
+
+        var targets = VisibleColumns.ToList();
+        if (targets.Count == 0)
+        {
+            if (forceStateRender)
+                await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _applyingPageWidth = true;
+        try
+        {
+            var rows = BuildAutoFitRows(out var rowsAreView);
+            var sampleSize = Math.Max(1, AutoFitSampleSize);
+            var sample = rows.Count > sampleSize ? rows.GetRange(0, sampleSize) : rows;
+            var autoFitCols = targets.Where(c => c.AllowAutoFit).ToList();
+            var measured = autoFitCols.Count > 0
+                ? await MeasureColumnContentWidthsAsync(autoFitCols, rowsAreView ? rows : null)
+                : null;
+            if (sample.Count == 0 && autoFitCols.Count > 0)
+            {
+                var floored = measured != null
+                    ? new Dictionary<string, double>(measured, StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                foreach (var col in autoFitCols)
+                {
+                    if (string.IsNullOrEmpty(col.Field)) continue;
+                    var authored = ColumnAutoFit.TryParseWidthPx(col.Width) ?? 0;
+                    if (authored <= 0) continue;
+                    var hdr = floored.TryGetValue(col.Field, out var m) && m > 0
+                        ? m
+                        : ColumnAutoFit.EstimateWidth(HeaderColumnDisplay(col), null, col.Type == ColumnType.Number);
+                    floored[col.Field] = Math.Max(hdr, authored);
+                }
+                measured = floored;
+            }
+            var available = await ResolveAvailableDataColumnsWidthAsync();
+            if (available <= 0)
+            {
+                if (forceStateRender)
+                    await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            var changes = ColumnAutoFit.ComputePageWidth(
+                BuildAutoFitTargets(targets, sample),
+                measured,
+                available,
+                AutoFitMinWidth,
+                AutoFitMaxWidth,
+                _autoFitCeilingPx,
+                AutoFitWidthScale);
+
+            var applied = false;
+            foreach (var change in changes)
+            {
+                var col = targets[change.Index];
+                var old = change.OldWidth;
+                var width = change.NewWidth;
+                if (persist && EventsRef?.ColumnResizing.HasDelegate == true)
+                {
+                    var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
+                    await EventsRef.ColumnResizing.InvokeAsync(resizing);
+                    if (resizing.Cancel)
+                        continue;
+                }
+                col.RuntimeWidth = width;
+                applied = true;
+                if (persist && EventsRef?.ColumnResized.HasDelegate == true)
+                {
+                    await EventsRef.ColumnResized.InvokeAsync(
+                        new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width });
+                }
+            }
+
+            if (persist)
+            {
+                await SaveGridSettingsAsync();
+                await FireLayoutChangedAsync();
+            }
+            if (applied || forceStateRender)
+                await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            _applyingPageWidth = false;
+        }
     }
 
     /// <summary>Scales every visible column proportionally so together they exactly fill the
@@ -13960,28 +14530,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (targets.Count == 0)
             return;
 
-        double available = 0;
-        try
-        {
-            _gridJsModule ??= await ImportGridJsModuleAsync();
-            available = await ColumnAutoFit.MeasureAvailableWidthAsync(_gridJsModule, _gridHostElement, ColumnAutoFitDomOptions.Grid);
-        }
-        catch
-        {
-        }
-        var measured = available > 0;
-        if (available <= 0 && _autoFitCeilingPx > 80)
-            available = _autoFitCeilingPx;
+        var available = await ResolveAvailableDataColumnsWidthAsync();
         if (available <= 0)
             return;
-        // The measured width already excludes the checkbox / selector / reorder cells; only
-        // the estimate fallback (no DOM) still needs them taken off.
-        if (!measured)
-        {
-            if (ShowCheckboxColumn) available -= 50;
-            if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
-            if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
-        }
 
         var changes = ColumnAutoFit.ComputeFitToWidth(
             BuildAutoFitTargets(targets, null), available, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
@@ -14102,7 +14653,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (!string.IsNullOrEmpty(_draggingColumnField))
         {
-            await AddGroup(_draggingColumnField);
+            var droppedCol = _draggingColumnField;
+            var prevDepth = _groupDescriptors.Count;
+            await AddGroup(droppedCol);
+            if (_groupDescriptors.Count > prevDepth)
+            {
+                RecordGridDragGraph(
+                    subKind: "GroupDrop",
+                    sourceLabel: $"Column:{droppedCol}",
+                    targetLabel: $"GroupBar (Level {_groupDescriptors.Count})",
+                    groupLevels: _groupDescriptors.Count,
+                    sourceField: droppedCol);
+            }
             _draggingColumnField = null;
         }
         else if (!string.IsNullOrEmpty(_draggingGroupChipField))
@@ -14113,6 +14675,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 _groupDescriptors.Remove(existing);
                 _groupDescriptors.Add(existing);
+                RecordGridDragGraph(
+                    subKind: "GroupChipReorder",
+                    sourceLabel: $"GroupChip:{existing.Field}",
+                    targetLabel: $"GroupBar (Level {_groupDescriptors.Count})",
+                    groupLevels: _groupDescriptors.Count,
+                    sourceField: existing.Field);
                 await SaveGridSettingsAsync();
                 await FireLayoutChangedAsync(changeKind: GridStateChangeKind.Grouping);
             }
@@ -14313,11 +14881,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => FocusGroupHeaderAsync(group)));
             builder.AddAttribute(3, "role", "row");
             builder.AddAttribute(4, "aria-expanded", group.IsCollapsed ? "false" : "true");
-            if (FocusGroupHeaderOnContextMenu)
+            if (FocusGroupHeaderOnContextMenu || ColumnMenuOnCells)
             {
                 // The header is current before the first await, so a host handler further up the
                 // bubbling path already reads it from GetCurrentGroup.
-                builder.AddAttribute(5, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, () => FocusGroupHeaderAsync(group)));
+                builder.AddAttribute(5, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, args =>
+                {
+                    if (ColumnMenuOnCells && VisibleColumns.FirstOrDefault(c => !string.IsNullOrEmpty(c.Field)) is { } first)
+                        OpenHeaderContextMenu(args, first.Field);
+                    return FocusGroupHeaderOnContextMenu ? FocusGroupHeaderAsync(group) : Task.CompletedTask;
+                }));
             }
 
             // Indent cells for nesting
@@ -14476,15 +15049,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         builder.OpenElement(155, "td");
                         builder.AddAttribute(156, "class", "fx-cell fx-group-header-aggregate-cell");
                         builder.AddAttribute(157, "style", CombineStyles(GetBlazorServerRenderCellStyle(col), GroupTotalTextStyle));
+                        if (!string.IsNullOrEmpty(col.Field))
+                            builder.AddAttribute(158, "data-field", col.Field);
 
                         if (aggCol != null)
                         {
                             var key = $"{aggCol.Field}_{aggCol.Type}";
                             if (group.Aggregates.TryGetValue(key, out var val) && val != null)
                             {
-                                builder.OpenElement(158, "span");
-                                builder.AddAttribute(159, "class", "fx-aggregate-value");
-                                builder.AddContent(160, FormatAggregateValue(aggCol, val,
+                                builder.OpenElement(159, "span");
+                                builder.AddAttribute(160, "class", "fx-aggregate-value");
+                                builder.AddContent(161, FormatAggregateValue(aggCol, val,
                                     aggCol.GroupCaptionTemplate ?? aggCol.GroupFooterTemplate));
                                 builder.CloseElement();
                             }
@@ -15103,7 +15678,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _gripAutoFitHandled = true;
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
-            await AutoFitCoreAsync(new List<GridColumn> { col });
+            var modeChanged = await ExitPageWidthForManualSizingAsync();
+            await AutoFitCoreAsync(new List<GridColumn> { col }, persist: true, forceStateRender: modeChanged);
             return;
         }
 
@@ -15138,6 +15714,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var delta = clientX - _resizeStartX;
         if (!_columnResizeDragged && Math.Abs(delta) <= GripJitterPx)
             return;
+        if (!_columnResizeDragged && IsPageWidth)
+            await ExitPageWidthForManualSizingAsync();
         _columnResizeDragged = true;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
@@ -15881,7 +16459,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // FitColumns keeps every column at its own width, so the table may end short of the
         // container (slack after the last column) or run past it (the scroll surface overflows
         // and a horizontal scrollbar appears). FillAvailable is the page's opt-in to stretch.
-        return ColumnAutoFit.TableStyle(WidthMode, totalWidth);
+        return ColumnAutoFit.TableStyle(EffectiveWidthMode, totalWidth);
     }
 
     private string GetScrollSurfaceStyle()
@@ -16846,20 +17424,29 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _gripClicks.Reset();
         _resizingCol = null;
         await UnregisterGridResizeCaptureAsync();
-        await AutoFitCoreAsync(new List<GridColumn> { col });
+        var modeChanged = await ExitPageWidthForManualSizingAsync();
+        await AutoFitCoreAsync(new List<GridColumn> { col }, persist: true, forceStateRender: modeChanged);
     }
 
     /// <summary>Applies best-fit widths and raises the resize / layout events ONCE for
     /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.
     /// The sizing is <see cref="ColumnAutoFit.ComputeBestFit"/>, shared with TreeGridControl.</summary>
-    private async Task AutoFitCoreAsync(List<GridColumn>? columns)
+    private async Task AutoFitCoreAsync(List<GridColumn>? columns, bool persist = true, bool forceStateRender = false)
     {
         if (columns == null || columns.Count == 0)
+        {
+            if (forceStateRender)
+                await InvokeAsync(StateHasChanged);
             return;
+        }
 
         var targets = columns.Where(c => c != null && IsColumnVisible(c) && c.AllowAutoFit).ToList();
         if (targets.Count == 0)
+        {
+            if (forceStateRender)
+                await InvokeAsync(StateHasChanged);
             return;
+        }
 
         // The view is read once per fit: the estimate sample and the every-row texts share it.
         var rows = BuildAutoFitRows(out var rowsAreView);
@@ -16869,14 +17456,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var changes = ColumnAutoFit.ComputeBestFit(
             BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx, AutoFitWidthScale);
         if (changes.Count == 0)
+        {
+            if (forceStateRender)
+            {
+                if (persist)
+                {
+                    await SaveGridSettingsAsync();
+                    await FireLayoutChangedAsync();
+                }
+                await InvokeAsync(StateHasChanged);
+            }
             return;
+        }
 
         foreach (var change in changes)
         {
             var col = targets[change.Index];
             var old = change.OldWidth;
             var width = change.NewWidth;
-            if (EventsRef?.ColumnResizing.HasDelegate == true)
+            if (persist && EventsRef?.ColumnResizing.HasDelegate == true)
             {
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
                 await EventsRef.ColumnResizing.InvokeAsync(resizing);
@@ -16885,30 +17483,40 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
             col.RuntimeWidth = width;
 
-            if (EventsRef?.ColumnResized.HasDelegate == true)
+            if (persist && EventsRef?.ColumnResized.HasDelegate == true)
             {
                 await EventsRef.ColumnResized.InvokeAsync(
                     new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width });
             }
         }
 
-        await SaveGridSettingsAsync();
-        await FireLayoutChangedAsync();
+        if (persist)
+        {
+            await SaveGridSettingsAsync();
+            await FireLayoutChangedAsync();
+        }
         await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>What the shared engine needs to know about each column. The sample texts
     /// are read lazily — only when the DOM measurement is unavailable.</summary>
     private List<ColumnAutoFitTarget> BuildAutoFitTargets(List<GridColumn> columns, IReadOnlyList<TValue>? sample)
-        => columns.Select(col => new ColumnAutoFitTarget
+        => columns.Select(col =>
         {
-            Field = col.Field ?? "",
-            HeaderText = col.DisplayHeader,
-            CurrentWidth = GetColumnWidthPx(col),
-            MinWidth = col.MinWidth,
-            MaxWidth = col.MaxWidth,
-            IsNumeric = col.Type == ColumnType.Number,
-            SampleTexts = sample == null ? null : () => sample.Select(item => GetCellDisplayValue(item, col)),
+            var isGroupedIndent = AllowGrouping && HideGroupedColumns && IsColumnGrouped(col);
+            return new ColumnAutoFitTarget
+            {
+                Field = col.Field ?? "",
+                HeaderText = HeaderColumnDisplay(col),
+                CurrentWidth = GetColumnWidthPx(col),
+                MinWidth = col.MinWidth,
+                MaxWidth = col.MaxWidth,
+                AllowAutoFit = col.AllowAutoFit,
+                IsNumeric = col.Type == ColumnType.Number,
+                SampleTexts = sample == null || isGroupedIndent
+                    ? null
+                    : () => sample.Select(item => GetCellDisplayValue(item, col)),
+            };
         }).ToList();
 
     /// <summary>Rows to estimate from when the DOM measurement is unavailable — taken
@@ -16974,13 +17582,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// read from the view with one row past the sample.</summary>
     private Dictionary<string, string[]>? BuildEveryRowAutoFitTexts(List<GridColumn> columns, IReadOnlyList<TValue>? view)
     {
-        if (!AutoFitEveryRow || view == null)
+        var includeGroupedSample = _groupDescriptors.Count > 0;
+        if ((!AutoFitEveryRow && !includeGroupedSample) || view == null)
             return null;
 
-        // One row past the sample means it does not cover the view.
         var sampleSize = Math.Max(1, AutoFitSampleSize);
-        if (view.Count == 0 || view.Count > sampleSize)
+        if (view.Count == 0 || (AutoFitEveryRow && !includeGroupedSample && view.Count > sampleSize))
             return null;
+        var useAllRows = AutoFitEveryRow && view.Count <= sampleSize;
+        var sourceRows = useAllRows ? view : view.Take(sampleSize);
         try
         {
             var texts = new Dictionary<string, string[]>(StringComparer.Ordinal);
@@ -16988,9 +17598,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 if (string.IsNullOrEmpty(col.Field) || texts.ContainsKey(col.Field) || !IsPlainTextAutoFitColumn(col))
                     continue;
+                if (AllowGrouping && HideGroupedColumns && IsColumnGrouped(col))
+                    continue;
                 // GetCellDisplayValue, not the render cache: rows outside the window are not
                 // being rendered and should not fill the display-value cache.
-                var longest = ColumnAutoFit.LongestTexts(view.Select(item => GetCellDisplayValue(item, col)));
+                var longest = ColumnAutoFit.LongestTexts(sourceRows.Select(item => GetCellDisplayValue(item, col)));
                 if (longest.Length > 0)
                     texts[col.Field] = longest;
             }
@@ -17752,6 +18364,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterActiveCellScrollSync", _gridHostElement);
             }
+            if (_pageWidthObserverRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterGridPageWidthObserver", _gridHostElement);
+            }
         }
         catch (Exception)
         {
@@ -17767,6 +18383,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _windowScrollRegistered = false;
         _columnWindowScrollRegistered = false;
         _activeCellScrollSyncRegistered = false;
+        _pageWidthObserverRegistered = false;
 
         if (_gridJsModule != null)
         {

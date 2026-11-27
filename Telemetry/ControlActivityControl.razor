@@ -14,6 +14,11 @@
     <div class="fx-ctl-root @ThemeClass">
         <div class="fx-tel-subbar">
             <div class="fx-tel-pill-group">
+                <ButtonControl CssClass="@PillCss(_subMode == "Tasks")"
+                               Tag="fx-ctl-mode-tasks"
+                               OnClick='() => SetSubMode("Tasks")'>
+                    By Task
+                </ButtonControl>
                 <ButtonControl CssClass="@PillCss(_subMode == "Controls")"
                                Tag="fx-ctl-mode-controls"
                                OnClick='() => SetSubMode("Controls")'>
@@ -68,7 +73,18 @@
             }
         </div>
 
-        @if (_subMode == "Controls")
+        @if (_subMode == "Tasks")
+        {
+            <div class="fx-ctl-task-host">
+                <TaskActivityControl @ref="_taskActivity"
+                                     Theme="@Theme"
+                                     Events="@Events"
+                                     UserId="@UserId"
+                                     Tenant="@Tenant"
+                                     DaysBack="@(ActiveSnapshot?.DaysBack ?? 30)" />
+            </div>
+        }
+        else if (_subMode == "Controls")
         {
             <div class="fx-tel-grid-host">
                 <GridControl TValue="FlexTelemetryControlRow"
@@ -234,8 +250,15 @@
     [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
     [Parameter] public FlexTelemetrySnapshot? Snapshot { get; set; }
 
+    /// <summary>The events behind the snapshot, for the By Task view. When null that view reads
+    /// them from the registered data source itself.</summary>
+    [Parameter] public IReadOnlyList<FlexTelemetryEvent>? Events { get; set; }
+    [Parameter] public string? UserId { get; set; }
+    [Parameter] public string? Tenant { get; set; }
+
     private FlexTelemetrySnapshot? _standaloneSnapshot;
-    private string _subMode = "Controls";
+    private TaskActivityControl? _taskActivity;
+    private string _subMode = "Tasks";
     private string _selectedCategory = "All";
     private string _selectedGridVerb = "All";
     private readonly List<ChartSeries> _gridVerbDonutSeries = new();
@@ -320,6 +343,9 @@
 
     public (string Suffix, string CsvContent) BuildCurrentCsv()
     {
+        if (_subMode == "Tasks" && _taskActivity is not null)
+            return _taskActivity.BuildCurrentCsv();
+
         var sb = new StringBuilder();
         if (_subMode == "Grids")
         {

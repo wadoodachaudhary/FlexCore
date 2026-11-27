@@ -10,7 +10,11 @@ public sealed partial class ReportLayoutSession
             || element.NativeNumberFormat?.SuppressIfDuplicate == true || element.NativeDateTimeFormat?.SuppressIfDuplicate == true);
 
     private (string Html, DuplicateFieldValue? Value) CaptureFieldContent(ReportDesignerElement element, int row)
+        => CaptureFieldContent(element, row, out _);
+
+    private (string Html, DuplicateFieldValue? Value) CaptureFieldContent(ReportDesignerElement element, int row, out string[]? paragraphValues)
     {
+        paragraphValues = null;
         // Physical-page replay must retain the same live link as the initial layout pass.
         if (element.Kind == "Subreport" && _layout.OnDemandSubreports.ContainsKey(element.Id))
             return (OnDemandCaptionHtml(element, row), null);
@@ -18,12 +22,24 @@ public sealed partial class ReportLayoutSession
         if (element.Kind == "Chart" && element.ChartMarker is { } marker)
             return (MarkerHtml(element, marker, row), null);
         DuplicateFieldValue? value = null;
+        var paragraph = element.Visual.Runs.FirstOrDefault()?.Paragraph is not null;
+        List<string>? values = null;
+        string Run(ReportTextRun run)
+        {
+            var value = Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat,
+                element.NativeNumberFormat, RunNumericFormat(element));
+            if (paragraph) (values ??= []).Add(value);
+            return value;
+        }
         var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString,
             element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat,
             SuppressesDuplicates(element) || element.Kind == "Field" && element.UseCrystalScreenMetrics
                 ? raw => value = new(raw) : null),
-            resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat,
-                element.NativeNumberFormat, RunNumericFormat(element)));
+            resolveRun: Run);
+        // A page may restyle or reflow the paragraph, but must not run its field formulas a second time.
+        if (paragraph && (ConditionList(_layout.ObjectConditions, element.Id, true).Length != 0
+            || values?.Any(v => v.Contains(_pageToken) || v.Contains(_countToken) || v.Contains(PageTokenSuffix)) == true))
+            paragraphValues = values?.ToArray() ?? [];
         return (html, html.Contains("[Formula error:", StringComparison.Ordinal) ? null : value);
     }
 
@@ -59,8 +75,9 @@ public sealed partial class ReportLayoutSession
 
         private readonly HashSet<(ReportLayoutSession Owner, string Source, int Page)> _currencySymbols = [];
 
-        public string PageCurrency(Item item, ReportLayoutSession fallback, int page, string html)
+        public string PageCurrency(Item item, ReportLayoutSession fallback, int page, string html, out ReportNativeNumericFormat? effective)
         {
+            effective = item.Element.NativeNumericFormat;
             if (html.Length == 0 || item.Element.Kind != "Field" || item.Element.FormatString.Length != 0
                 || item.Element.NativeNumericFormat is not { OneCurrencySymbolPerPage: true, CurrencySymbolType: 2, UnsupportedReason: null } format
                 || item.DuplicateValue?.Value is not (sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)) return html;
@@ -69,7 +86,7 @@ public sealed partial class ReportLayoutSession
             var plain = without.Format(raw);
             if (plain == format.Format(raw) || _currencySymbols.Add((item.Owner ?? fallback, item.Element.SourceKey, page))) return html;
             var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name);
-            element.NativeNumericFormat = without;
+            element.NativeNumericFormat = effective = without;
             return ReportObjectRenderer.Content(element, _ => plain);
         }
 

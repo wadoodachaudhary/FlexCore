@@ -28,6 +28,7 @@ public static partial class ReportDesignerEditing
         {
             document.Groups = groups;
             SyncGroupReferences();
+            ReportDesignerCommands.SyncGroupSorts(document);
             return;
         }
         var removed = document.Groups.Where(group => groups.All(next => next.Id != group.Id)).ToList();
@@ -53,6 +54,7 @@ public static partial class ReportDesignerEditing
         document.Groups = groups;
         document.Sections = sections;
         SyncGroupReferences();
+        ReportDesignerCommands.SyncGroupSorts(document);
 
         void SyncGroupReferences()
         {

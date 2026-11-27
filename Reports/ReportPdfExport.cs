@@ -85,7 +85,7 @@ internal static class ReportPdfExport
             return Size * lineHeight;
         }
     }
-    private sealed record Run(string Text, Ink Ink);
+    private sealed record Run(string Text, Ink Ink, double TabAdvance = 0, double LayoutTabAdvance = 0);
     private sealed record TextLine(IReadOnlyList<Run> Runs, double Width, double Height, bool ParagraphEnd);
 
     internal static byte[] Export(ReportTab tab, ReportPdfFontMode fontMode = ReportPdfFontMode.LegacyVb)
@@ -285,15 +285,19 @@ internal static class ReportPdfExport
             // Crystal's export carries a fixed one-line text object as its printer layout painted it: the glyphs
             // that start inside the box at the authored size ("Notes: ... The quick br"). A field's whole value
             // goes out behind the box's clip rectangle ("AB0001/001.1" in a 975-twip box shows "AB0001/001").
+            var fixedNativeText = element.UseCrystalScreenMetrics && !wrap && element.Kind is ("Text" or "FieldHeading");
             var clip = nativeMemo ? NativeClip.Break
-                : element.UseCrystalScreenMetrics && !wrap && ink.Em < ink.Size && element.Kind is "Text" or "FieldHeading"
+                : fixedNativeText && ink.Em < ink.Size
                     ? NativeClip.Paint
                 : NativeClip.None;
             if (item.FormattedContent.StartsWith("<div data-fx-paragraph=", StringComparison.Ordinal))
-                Paragraphs(page, item.FormattedContent, ink, x + left + indent, y + top, textWidth, height - top - bottom, ReportObjectRenderer.TextLineLimit(element));
+                Paragraphs(page, item.FormattedContent, ink, x + left + indent, y + top, textWidth, height - top - bottom, ReportObjectRenderer.TextLineLimit(element), wrap, fixedNativeText);
             else
             {
                 var runs = Runs(item.FormattedContent, ink);
+                if (indent > 0 && ReportObjectRenderer.IsRightFixedString(element)
+                    && !item.FormattedContent.StartsWith("<span style=\"position:absolute;right:0;", StringComparison.Ordinal))
+                    runs = IndentedSuffix(runs, textWidth);
                 // Legacy Verdana is laid out at its authored size before the export reduces the painted em.
                 // Keep the original width for alignment and clipping; only the line-break test uses the larger glyphs.
                 var prepared = wrap && item.TextLines is null && element.Kind is ("Text" or "FieldHeading") && ink.Native && ink.Size > ink.Em
@@ -516,7 +520,7 @@ internal static class ReportPdfExport
         };
     }
 
-    private static void Paragraphs(NativePdfPage page, string html, Ink ink, double x, double y, double width, double height, int limit)
+    private static void Paragraphs(NativePdfPage page, string html, Ink ink, double x, double y, double width, double height, int limit, bool wrap, bool fixedNativeText)
     {
         var body = new HtmlParser().ParseDocument(html).Body!;
         var at = y;
@@ -534,11 +538,12 @@ internal static class ReportPdfExport
                 var baseInk = source.FirstElementChild is { } span ? Apply(ink, Styles(span)) : ink;
                 var runs = Runs(source.InnerHtml, baseInk);
                 var available = width - left - right;
-                var lines = Lines(runs, available, explicitLines.Length == 0, firstOffset: first);
+                var clip = fixedNativeText && runs.Any(r => r.Ink.Em < r.Ink.Size) ? NativeClip.Paint : NativeClip.None;
+                var lines = Lines(runs, available, wrap && explicitLines.Length == 0, firstOffset: first, tabStop: 18);
                 foreach (var line in lines)
                 {
                     if (limit > 0 && count >= limit || at >= y + height) return;
-                    Text(page, runs, x + left + first, at, available - first, y + height - at, css["text-align"], false, prepared: [line]);
+                    Text(page, runs, x + left + first, at, available - first, y + height - at, css["text-align"], false, clip: clip, prepared: [line]);
                     first = 0; at += line.Height; count++;
                 }
             }
@@ -598,37 +603,51 @@ internal static class ReportPdfExport
         return ink;
     }
 
-    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15, bool breakLongWords = true, double firstOffset = 0)
+    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15, bool breakLongWords = true, double firstOffset = 0, double tabStop = 0)
     {
         var lines = new List<TextLine>();
         var current = new List<Run>();
         var used = 0d;
+        var hasParagraphTabs = tabStop > 0 && runs.Any(r => r.Text.Contains('\t'));
+        var layoutUsed = 0d;
         var tallest = runs.Count == 0 ? 10 * lineHeight : runs[0].Ink.Leading(lineHeight);
         var fullWidth = width; width -= firstOffset;
         void Finish(bool paragraphEnd = false)
         {
             width = fullWidth;
             lines.Add(new(current.ToArray(), used, tallest, paragraphEnd));
-            current.Clear(); used = 0; tallest = runs.Count == 0 ? 10 * lineHeight : runs[0].Ink.Leading(lineHeight);
+            current.Clear(); used = layoutUsed = 0; tallest = runs.Count == 0 ? 10 * lineHeight : runs[0].Ink.Leading(lineHeight);
         }
         void Add(string value, Ink ink)
         {
             if (value.Length == 0) return;
             var adjust = 0d;
-            if (current.Count > 0 && current[^1].Ink == ink)
+            if (current.Count > 0 && current[^1].LayoutTabAdvance == 0 && current[^1].Ink == ink)
             {
                 if (ink.Native && ink.CharacterPitch == 0) adjust = NativePdfFont.Resolve(ink.ResolvedFamily, ink.Bold, ink.Italic).Kerning(current[^1].Text[^1], value[0]) * ink.Em / 1000;
                 current[^1] = current[^1] with { Text = current[^1].Text + value };
             }
             else current.Add(new(value, ink));
+            if (hasParagraphTabs) layoutUsed += LayoutWidth(value, ink);
             used += Measure(value, ink) + adjust; tallest = Math.Max(tallest, ink.Leading(lineHeight));
         }
         foreach (var run in runs)
         {
-            foreach (Match token in Regex.Matches(run.Text, @"\n|[^\S\n]+|[^\s]+"))
+            foreach (Match token in Regex.Matches(run.Text, tabStop > 0 ? @"\n|\t|[^\S\n\t]+|[^\s]+" : @"\n|[^\S\n]+|[^\s]+"))
             {
                 var value = token.Value;
                 if (value == "\n") { Finish(true); continue; }
+                if (value == "\t" && tabStop > 0)
+                {
+                    var origin = lines.Count == 0 ? firstOffset : 0;
+                    // CSS advances a tab by at least half a space. Choose the stop at the layout
+                    // size, then move the smaller PDF ink to that same absolute location.
+                    var stop = Math.Ceiling((origin + layoutUsed + LayoutWidth(" ", run.Ink) / 2) / tabStop) * tabStop - origin;
+                    current.Add(new("", run.Ink, stop - used, stop - layoutUsed));
+                    used = layoutUsed = stop;
+                    tallest = Math.Max(tallest, run.Ink.Leading(lineHeight));
+                    continue;
+                }
                 // CSS pre-wrap uses eight-space tab stops. Keep tabs selectable as spaces.
                 if (value.Contains('\t'))
                 {
@@ -694,6 +713,36 @@ internal static class ReportPdfExport
         return lines;
     }
 
+    private static double LayoutWidth(string text, Ink ink)
+    {
+        if (!ink.Native || ink.CharacterPitch > 0) return Measure(text, ink);
+        var em = Math.Round(ink.Size * ink.Dpi / 72, MidpointRounding.AwayFromZero) * 72 / ink.Dpi;
+        return NativePdfPage.MeasureText(text, em, ink.ResolvedFamily, ink.Bold, ink.Italic);
+    }
+
+    // Pick the visible suffix using the viewer's layout em before painting it with the legacy PDF em.
+    // Keep the glyph crossing the left edge, and keep the original right alignment.
+    private static IReadOnlyList<Run> IndentedSuffix(IReadOnlyList<Run> runs, double available)
+    {
+        if (available <= 0 || runs.Any(r => r.Text.Any(char.IsControl)) || runs.Sum(r => LayoutWidth(r.Text, r.Ink)) <= available) return runs;
+        for (var i = runs.Count - 1; i >= 0; i--)
+        {
+            var run = runs[i];
+            var width = LayoutWidth(run.Text, run.Ink);
+            if (width < available) { available -= width; continue; }
+            var boundaries = StringInfo.ParseCombiningCharacters(run.Text);
+            var end = run.Text.Length;
+            for (var j = boundaries.Length - 1; j >= 0; j--)
+            {
+                var start = boundaries[j];
+                available -= LayoutWidth(run.Text[start..end], run.Ink);
+                if (available <= .001) return [run with { Text = run.Text[start..] }, .. runs.Skip(i + 1)];
+                end = start;
+            }
+        }
+        return runs;
+    }
+
     private static double Measure(string text, Ink ink) => ink.CharacterPitch > 0
         ? StringInfo.ParseCombiningCharacters(text).Length * ink.CharacterPitch
         : NativePdfPage.MeasureText(text, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic, ink.Native);
@@ -723,6 +772,13 @@ internal static class ReportPdfExport
                 var remaining = clip == NativeClip.Break ? nativeClipWidth : width; var kept = new List<Run>();
                 foreach (var run in line.Runs)
                 {
+                    if (run.LayoutTabAdvance != 0)
+                    {
+                        if (remaining <= run.LayoutTabAdvance) break;
+                        kept.Add(run);
+                        remaining -= run.LayoutTabAdvance;
+                        continue;
+                    }
                     if (run.Ink.CharacterPitch > 0)
                     {
                         var starts = StringInfo.ParseCombiningCharacters(run.Text);
@@ -746,7 +802,7 @@ internal static class ReportPdfExport
                 }
                 runs2 = kept;
             }
-            var lineWidth = clip == NativeClip.None ? line.Width : runs2.Sum(run => Measure(run.Text, run.Ink));
+            var lineWidth = clip == NativeClip.None ? line.Width : runs2.Sum(run => run.TabAdvance + Measure(run.Text, run.Ink));
             // Only fixed right-aligned native strings anchor an overwide line to its right edge.
             var offset = anchorRight && alignment == "right" ? width - lineWidth : Math.Max(0, alignment == "right" ? width - lineWidth : alignment == "center" ? (width - lineWidth) / 2 : 0);
             var cursor = x + offset;
@@ -760,6 +816,7 @@ internal static class ReportPdfExport
             var extra = alignment == "justify" && !line.ParagraphEnd && spaces > 0 ? Math.Max(0, width - line.Width) / spaces : 0;
             foreach (var run in runs2)
             {
+                if (run.LayoutTabAdvance != 0) { cursor += run.TabAdvance; continue; }
                 if (run.Ink.CharacterPitch > 0)
                 {
                     var characters = StringInfo.GetTextElementEnumerator(run.Text);

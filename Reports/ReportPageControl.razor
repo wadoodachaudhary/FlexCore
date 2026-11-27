@@ -28,7 +28,7 @@
                          style="@(ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips) + (overprint ? "visibility:hidden;" : ""))">
                         @if (marked is not null)
                         {
-                            @((MarkupString)marked)
+                            @((MarkupString)ReportObjectRenderer.PreviewContent(item.Element, item.FormattedContent, marked))
                         }
                         else if (item.Table is not null)
                         {
@@ -40,7 +40,7 @@
                         }
                         else
                         {
-                            @((MarkupString)(PrintNumericValues ? item.UnmaskedNumericContent ?? item.FormattedContent : item.FormattedContent))
+                            @((MarkupString)ReportObjectRenderer.PreviewContent(item.Element, PrintNumericValues ? item.UnmaskedNumericContent ?? item.FormattedContent : item.FormattedContent))
                         }
                     </div>
                 }

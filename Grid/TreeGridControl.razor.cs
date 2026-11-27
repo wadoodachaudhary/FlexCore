@@ -61,6 +61,10 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
     /// layout share the width out; FitColumns keeps every column at its own width — slack
     /// after the last column or a horizontal scrollbar, and a resize moves only that column.</summary>
     [Parameter] public GridWidthMode WidthMode { get; set; } = GridWidthMode.FillAvailable;
+    [Parameter] public bool PageWidth { get; set; }
+    [Parameter] public EventCallback<bool> PageWidthChanged { get; set; }
+    public bool IsPageWidth => _runtimePageWidth ?? PageWidth;
+    internal GridWidthMode EffectiveWidthMode => IsPageWidth ? GridWidthMode.FillAvailable : (_runtimeWidthMode ?? WidthMode);
     [Parameter] public bool EnableHover { get; set; } = true;
     [Parameter] public bool ToggleOnRowClick { get; set; } = true;
     [Parameter] public int TabIndex { get; set; } = 0;
@@ -346,6 +350,19 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
         {
             _lastRenderedColumnCount = _columns.Count;
             StateHasChanged();
+        }
+        if (IsPageWidth && VisibleColumns.Count > 0)
+        {
+            var sig = $"{string.Join("|", VisibleColumns.Select(GetColumnKey))}#{_flatNodes.Count}";
+            if (!string.Equals(sig, _lastPageWidthSignature, StringComparison.Ordinal))
+            {
+                _lastPageWidthSignature = sig;
+                await FitColumnsToPageWidthCoreAsync(reportEvents: false);
+            }
+        }
+        else
+        {
+            _lastPageWidthSignature = "";
         }
 
         // Deferred no-trap refocus from ClearActiveCellEdit — runs after the
@@ -705,7 +722,7 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
                 parts.Add("fx-treegrid-toolbar-on");
             if (_isColumnResizing)
                 parts.Add("fx-treegrid-resizing");
-            if (WidthMode == GridWidthMode.FitColumns)
+            if (EffectiveWidthMode == GridWidthMode.FitColumns && WidthMode == GridWidthMode.FitColumns)
                 parts.Add("fx-treegrid-width-fit-columns");
             return string.Join(" ", parts);
         }
@@ -1021,6 +1038,18 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
     protected override void OnParametersSet()
     {
         if (PageSize < 1) throw new ArgumentException("PageSize must be positive.");
+        if (PageWidth != _lastPageWidthParam)
+        {
+            _lastPageWidthParam = PageWidth;
+            _runtimePageWidth = null;
+            _runtimeWidthMode = null;
+            _lastPageWidthSignature = "";
+        }
+        if (WidthMode != _lastWidthModeParam)
+        {
+            _lastWidthModeParam = WidthMode;
+            _runtimeWidthMode = null;
+        }
         // Only rebuild the tree when DataSource actually changes, to preserve
         // expand/collapse state across re-renders triggered by StateHasChanged.
         if (!_treeBuilt || !ReferenceEquals(DataSource, _previousDataSource))
@@ -2396,9 +2425,93 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
             CurrentWidth = GetEffectiveColumnWidth(col),
             MinWidth = col.MinWidth,
             MaxWidth = col.MaxWidth,
+            AllowAutoFit = col.AllowAutoFit,
             IsNumeric = col.Type == ColumnType.Number,
             SampleTexts = sample == null ? null : () => sample.Select(item => GetCellDisplayValue(item, col)),
         }).ToList();
+
+    private bool _lastPageWidthParam;
+    private GridWidthMode _lastWidthModeParam = GridWidthMode.FillAvailable;
+    private bool? _runtimePageWidth;
+    private GridWidthMode? _runtimeWidthMode;
+    private string _lastPageWidthSignature = "";
+
+    public async Task SetPageWidthAsync(bool enabled)
+    {
+        _runtimePageWidth = enabled;
+        _runtimeWidthMode = enabled ? GridWidthMode.FillAvailable : GridWidthMode.FitColumns;
+        if (PageWidthChanged.HasDelegate)
+            await PageWidthChanged.InvokeAsync(enabled);
+
+        if (enabled)
+        {
+            await FitColumnsToPageWidthCoreAsync(reportEvents: true);
+            _lastPageWidthSignature = $"{string.Join("|", VisibleColumns.Select(GetColumnKey))}#{_flatNodes.Count}";
+        }
+        else
+        {
+            _lastPageWidthSignature = "";
+            await AutoFitColumnsAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public Task FitColumnsToPageWidthAsync() => SetPageWidthAsync(true);
+
+    private async Task FitColumnsToPageWidthCoreAsync(bool reportEvents)
+    {
+        if (!AllowColumnAutoFit || _disposed) return;
+        var targets = VisibleColumns;
+        if (targets.Count == 0) return;
+
+        var autoFitCols = targets.Where(c => c.AllowAutoFit).ToList();
+        var measured = autoFitCols.Count > 0 ? await MeasureColumnContentWidthsAsync(autoFitCols) : null;
+        var available = await ColumnAutoFit.MeasureAvailableWidthAsync(
+            await GetGridJsModuleAsync(), _treeGridElement, ColumnAutoFitDomOptions.TreeGrid);
+        var hasMeasured = available > 0;
+        if (available <= 0 && _autoFitCeilingPx > 80) available = _autoFitCeilingPx;
+        if (available <= 0) return;
+        if (!hasMeasured && ShowCheckboxes) available -= CheckCellWidthPx;
+
+        var sample = VisibleNodes.Take(Math.Max(1, AutoFitSampleSize)).Select(n => n.Data).ToList();
+        if (sample.Count == 0 && autoFitCols.Count > 0)
+        {
+            var floored = measured != null
+                ? new Dictionary<string, double>(measured, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            foreach (var col in autoFitCols)
+            {
+                var key = GetColumnKey(col);
+                if (string.IsNullOrEmpty(key)) continue;
+                var authored = ColumnAutoFit.TryParseWidthPx(col.Width) ?? 0;
+                if (authored <= 0) continue;
+                var hdr = floored.TryGetValue(key, out var m) && m > 0
+                    ? m
+                    : ColumnAutoFit.EstimateWidth(col.DisplayHeader, null, col.Type == ColumnType.Number);
+                floored[key] = Math.Max(hdr, authored);
+            }
+            measured = floored;
+        }
+        var changes = ColumnAutoFit.ComputePageWidth(
+            BuildAutoFitTargets(targets, sample), measured, available, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
+        if (changes.Count == 0) return;
+        foreach (var change in changes)
+            _columnWidthOverrides[GetColumnKey(targets[change.Index])] = change.NewWidth;
+        await InvokeAsync(StateHasChanged);
+
+        if (reportEvents && ColumnResized.HasDelegate)
+        {
+            foreach (var change in changes)
+            {
+                await ColumnResized.InvokeAsync(new ResizeEventArgs
+                {
+                    Field = change.Field,
+                    OldWidth = change.OldWidth,
+                    NewWidth = change.NewWidth
+                });
+            }
+        }
+    }
 
     /// <summary>Applies the engine's widths and reports each through ColumnResized, so a host
     /// that persists user resizes persists best fit the same way.</summary>
@@ -2450,7 +2563,7 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
     /// the stylesheet's width:100% fixed layout (the table shares the host out).</summary>
     internal string? GetTableStyle()
     {
-        if (WidthMode != GridWidthMode.FitColumns) return null;
+        if (EffectiveWidthMode != GridWidthMode.FitColumns) return null;
         var total = ShowCheckboxes ? CheckCellWidthPx : 0d;
         foreach (var col in VisibleColumns)
         {
@@ -2463,19 +2576,49 @@ public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase,
     private async Task HeaderMenuBestFitAsync(TreeGridColumn? column)
     {
         _headerMenu = false;
+        if (IsPageWidth)
+        {
+            _runtimePageWidth = false;
+            _runtimeWidthMode = GridWidthMode.FitColumns;
+            _lastPageWidthSignature = "";
+            if (PageWidthChanged.HasDelegate)
+                await PageWidthChanged.InvokeAsync(false);
+        }
         if (column != null) await AutoFitCoreAsync(new List<TreeGridColumn> { column });
     }
 
-    private Task HeaderMenuBestFitAllAsync()
+    private async Task HeaderMenuBestFitAllAsync()
     {
         _headerMenu = false;
-        return AutoFitColumnsAsync();
+        _runtimeWidthMode = GridWidthMode.FitColumns;
+        if (IsPageWidth)
+        {
+            _runtimePageWidth = false;
+            _lastPageWidthSignature = "";
+            if (PageWidthChanged.HasDelegate)
+                await PageWidthChanged.InvokeAsync(false);
+        }
+        await AutoFitColumnsAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private Task HeaderMenuBestFitToGridAsync()
+    private async Task HeaderMenuBestFitToGridAsync()
     {
         _headerMenu = false;
-        return FitColumnsToGridAsync();
+        if (IsPageWidth)
+        {
+            _runtimePageWidth = false;
+            _lastPageWidthSignature = "";
+            if (PageWidthChanged.HasDelegate)
+                await PageWidthChanged.InvokeAsync(false);
+        }
+        await FitColumnsToGridAsync();
+    }
+
+    private Task HeaderMenuTogglePageWidthAsync()
+    {
+        _headerMenu = false;
+        return SetPageWidthAsync(!IsPageWidth);
     }
 
     internal async Task EndColumnResize(MouseEventArgs e)

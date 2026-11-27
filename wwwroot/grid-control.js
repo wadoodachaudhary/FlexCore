@@ -4447,17 +4447,19 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize, dom, te
                 if (!wanted.has(field) || !Array.isArray(list) || !list.length) continue;
                 const sample = [...gridRoot.querySelectorAll(`tbody td[${o.fieldAttribute}]`)]
                     .find(td => td.getAttribute(o.fieldAttribute) === field && td.children.length === 0);
-                if (!sample) continue;
-                const cs = getComputedStyle(sample);
-                ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+                const styleRef = sample || gridRoot.querySelector("tbody td.fx-cell") || gridRoot;
+                const cs = getComputedStyle(styleRef);
+                const fontWeight = sample ? cs.fontWeight : "400";
+                ctx.font = `${cs.fontStyle} ${fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
                 if ("letterSpacing" in ctx) ctx.letterSpacing = cs.letterSpacing === "normal" ? "0px" : cs.letterSpacing;
                 const widest = list.map(text => [String(text), ctx.measureText(String(text)).width])
                     .sort((a, b) => b[1] - a[1]).slice(0, 3);
-                host.style.font = cs.font;
+                host.style.font = sample ? cs.font : `${cs.fontStyle} 400 ${cs.fontSize} ${cs.fontFamily}`;
                 host.style.letterSpacing = cs.letterSpacing;
+                const pad = sample ? edges(sample) : 9;
                 for (const [text] of widest) {
                     host.textContent = text;
-                    bump(field, host.getBoundingClientRect().width + edges(sample) + 6);
+                    bump(field, host.getBoundingClientRect().width + pad + 6);
                 }
             } catch (_) {
                 // This column keeps its rendered-row width.
@@ -4593,12 +4595,53 @@ export function measureGridAvailableWidth(gridRoot, scrollerSelector, fieldAttri
         for (const th of headerRow.children) {
             const w = th.getBoundingClientRect().width;
             ths += w;
-            if (!th.hasAttribute(attr)) available -= w;
+            if (!th.hasAttribute(attr)) {
+                const authored = parseFloat(th.style.width);
+                available -= authored > 0 ? authored : w;
+            }
         }
         const table = headerRow.closest("table");
         if (table) available -= Math.max(0, table.getBoundingClientRect().width - ths);
     }
     return Math.max(0, available - 2);
+}
+
+const gridPageWidthObservers = new WeakMap();
+
+export function registerGridPageWidthObserver(gridRoot, scrollerSelector, dotNetRef) {
+    if (!gridRoot || !dotNetRef || typeof ResizeObserver !== "function") return;
+    unregisterGridPageWidthObserver(gridRoot);
+    const target = gridRoot.querySelector(scrollerSelector || ".fx-grid-content") || gridRoot;
+    let lastWidth = Math.round(target.clientWidth || gridRoot.clientWidth || 0);
+    let timer = 0;
+    let disposed = false;
+    const observer = new ResizeObserver(() => {
+        if (disposed || !gridRoot.isConnected) return;
+        const width = Math.round(target.clientWidth || gridRoot.clientWidth || 0);
+        if (width <= 0 || Math.abs(width - lastWidth) < 2) return;
+        lastWidth = width;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+            timer = 0;
+            if (disposed || !gridRoot.isConnected) return;
+            dotNetRef.invokeMethodAsync("OnPageWidthContainerResizedAsync", width).catch(() => { });
+        }, 120);
+    });
+    observer.observe(target);
+    gridPageWidthObservers.set(gridRoot, () => {
+        disposed = true;
+        if (timer) clearTimeout(timer);
+        observer.disconnect();
+    });
+}
+
+export function unregisterGridPageWidthObserver(gridRoot) {
+    if (!gridRoot) return;
+    const dispose = gridPageWidthObservers.get(gridRoot);
+    if (dispose) {
+        gridPageWidthObservers.delete(gridRoot);
+        dispose();
+    }
 }
 
 // ── Endpoint-only drag selection ─────────────────────────────────────────

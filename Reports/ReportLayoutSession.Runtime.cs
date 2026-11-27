@@ -520,6 +520,14 @@ public sealed partial class ReportLayoutSession
         return element;
     }
 
+    private string PagedParagraph(ReportDesignerElement element, string[] values, int page, int count, bool repeated)
+    {
+        var index = 0;
+        return ReportObjectRenderer.Content(element, resolveRun: _ =>
+            ResolvePageText(values[index++].Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), page, count, repeated, plainText: true));
+    }
+
     // furniture: the band prints inside the page header or footer of physicalPage (a subreport's section there).
     private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null, bool furniture = false)
     {
@@ -554,7 +562,9 @@ public sealed partial class ReportLayoutSession
                         .Any(c => c.Key.Equals("DisplayString", StringComparison.OrdinalIgnoreCase));
                     var template = item.TemplateHtml ?? item.Html;
                     var duplicateValue = item.DuplicateValue;
-                    var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
+                    var html = item.ParagraphValues is { } values && element.Visual.Runs.FirstOrDefault()?.Paragraph is not null
+                        ? owner.PagedParagraph(element, values, page, count, repeated)
+                        : richChanged && owner._physicalPageSchedule && element.Visual.Runs[0].Paragraph is null
                         ? RestylePrintedRuns(template, element)
                         : replacesText || richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
                             ? owner.CaptureFieldContent(element, item.Row).Html : template;

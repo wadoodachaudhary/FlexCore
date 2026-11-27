@@ -42,6 +42,24 @@ public partial class PivotControl<TValue>
     /// <summary>Optional axis grouping projection. It does not replace fields used by summary calculations.</summary>
     [Parameter] public Func<TValue, string, object?>? GroupValueSelector { get; set; }
 
+    /// <summary>
+    /// Optional field list for the interactive builder, in display order. When set it replaces
+    /// discovery from the first data row, so the builder keeps its fields while the data is empty.
+    /// </summary>
+    [Parameter] public IReadOnlyList<string>? Fields { get; set; }
+
+    /// <summary>
+    /// Optional per-field settings (aggregation, format, label) taken when the user drops that
+    /// field into Values. A field without an entry starts as a Sum with <see cref="ValueFormat"/>.
+    /// </summary>
+    [Parameter] public IReadOnlyDictionary<string, PivotValueConfig>? ValueFieldDefaults { get; set; }
+
+    /// <summary>
+    /// True leaves out the row-total columns while no field is on Columns, where each one only
+    /// repeats its value column. The grand-total row stays.
+    /// </summary>
+    [Parameter] public bool HideRowTotalsWithoutColumns { get; set; }
+
     private string ResolvedStyle => Style;
 
     // ── Internal state ──────────────────────────────────────────────
@@ -123,6 +141,11 @@ public partial class PivotControl<TValue>
     private void DiscoverFields()
     {
         _allDiscoveredFields.Clear();
+        if (Fields is { Count: > 0 })
+        {
+            _allDiscoveredFields.AddRange(Fields);
+            return;
+        }
         var type = typeof(TValue);
 
         if (typeof(IDictionary<string, object>).IsAssignableFrom(type))
@@ -156,8 +179,7 @@ public partial class PivotControl<TValue>
         if (ValueFields is { Count: > 0 })
         {
             foreach (var vc in ValueFields)
-                _valueFieldsActive.Add(new PivotValueConfig
-                    { Field = vc.Field, Aggregation = vc.Aggregation, Format = vc.Format, Label = vc.Label });
+                _valueFieldsActive.Add(CopyValueConfig(vc));
         }
         else if (!string.IsNullOrWhiteSpace(ValueField) && _allDiscoveredFields.Contains(ValueField))
         {
@@ -214,7 +236,7 @@ public partial class PivotControl<TValue>
                 break;
             case PivotArea.Value:
                 if (!_valueFieldsActive.Any(v => v.Field == field))
-                    _valueFieldsActive.Add(new PivotValueConfig { Field = field, Format = ValueFormat });
+                    _valueFieldsActive.Add(NewValueConfig(field));
                 break;
             case PivotArea.Filter:
                 if (!_filterFieldsActive.Contains(field)) _filterFieldsActive.Add(field);
@@ -224,6 +246,30 @@ public partial class PivotControl<TValue>
         RebuildFilters();
         BuildPivot();
     }
+
+    private PivotValueConfig NewValueConfig(string field)
+    {
+        if (ValueFieldDefaults != null && ValueFieldDefaults.TryGetValue(field, out var preset))
+            return CopyValueConfig(preset);
+        var config = new PivotValueConfig { Field = field, Format = ValueFormat };
+        config.Label = AutoValueLabel(config);
+        return config;
+    }
+
+    private static PivotValueConfig CopyValueConfig(PivotValueConfig source) => new()
+    {
+        Field = source.Field,
+        Aggregation = source.Aggregation,
+        Format = source.Format,
+        Label = source.Label,
+        ValueAggregator = source.ValueAggregator
+    };
+
+    /// <summary>"Sum of Amount" from the field's display label; null (the built-in caption) when the field has none.</summary>
+    private string? AutoValueLabel(PivotValueConfig config) =>
+        FieldLabels != null && FieldLabels.TryGetValue(config.Field, out var label)
+            ? $"{config.Aggregation} of {label}"
+            : null;
 
     private void RemoveField(string field, PivotArea area)
     {
@@ -257,7 +303,7 @@ public partial class PivotControl<TValue>
         if (Enum.TryParse<AggregateType>(e.Value?.ToString(), out var agg))
         {
             vc.Aggregation = agg;
-            vc.Label = null; // reset to auto-label
+            vc.Label = AutoValueLabel(vc); // reset to auto-label
             BuildPivot();
         }
     }
@@ -357,7 +403,7 @@ public partial class PivotControl<TValue>
             }
         }
 
-        if (ShowGrandTotals)
+        if (ShowGrandTotals && !(HideRowTotalsWithoutColumns && effectiveCols.Count == 0))
         {
             foreach (var vc in effectiveValues)
             {

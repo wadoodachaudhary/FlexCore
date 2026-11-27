@@ -35,6 +35,9 @@ public sealed class GridSettings
     /// <summary>Field names of currently-active group columns, in the order
     /// the user dragged them onto the grouping bar.</summary>
     public List<string>? GroupColumns { get; set; }
+
+    /// <summary>User-selected Page Width mode override, or null when untouched.</summary>
+    public bool? PageWidth { get; set; }
 }
 
 /// <summary>

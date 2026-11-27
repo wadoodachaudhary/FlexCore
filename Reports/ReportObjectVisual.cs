@@ -269,6 +269,20 @@ public static class ReportObjectRenderer
         && e.HorizontalAlignment.Equals("Right", StringComparison.OrdinalIgnoreCase) && !e.HasRotatedText && !WrapText(e)
         && e.NativeDateTimeFormat == null && e.NativeNumberFormat == null && e.NativeNumericFormat == null;
 
+    // Chromium aligns an overflowing preformatted line to its start even with text-align:right.
+    // Float the complete line against its right edge instead; leave snapshot values and PDF runs untouched.
+    internal static string PreviewContent(ReportDesignerElement element, string html, string? highlighted = null)
+    {
+        var content = highlighted ?? html;
+        if (!IsRightFixedString(element) || html.Length == 0 || html.StartsWith("<div data-fx-paragraph=", StringComparison.Ordinal)
+            || html.StartsWith("<span style=\"position:absolute;right:0;", StringComparison.Ordinal)) return content;
+        var decoration = element.Underline ? "text-decoration:underline;" + NativeUnderline(element) : "";
+        var line = $"<span style=\"float:right;width:max-content;{decoration}\">{content}</span>";
+        // Overflow on the field itself clips at its padding edge. Do not let the right float
+        // paint back into a reserved indent; the PDF clip starts at the content edge.
+        return element.IndentTwips > 0 ? $"<span style=\"display:block;width:100%;overflow:hidden\">{line}</span>" : line;
+    }
+
     internal static bool WrapText(ReportDesignerElement item) => !(item.Kind == "Field"
         && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null
             || !item.CanGrow && (item.NativeDateTimeFormat is not null || FixedLineCount(item) == 1))
@@ -553,9 +567,20 @@ public static class ReportObjectRenderer
                     if (tabs != 0) parts[0].Value = parts[0].Value[tabs..];
                     if (AppendValues(parts, next == resolved.Length))
                     {
+                        // An empty block occupies a line. Give growing text a character offset for it so
+                        // a continuation can distinguish a blank already printed from a blank still to come.
+                        if (item.CanGrow && parts.All(part => part.Value.Length == 0))
+                            Append(resolved[start].Run, "\n"); // The offset must have the paragraph font, not the object's font.
                         var pitch = parts.Select(p => ReportFontCatalog.NativeLineHeightPixels(p.Run.FontFamily, p.Run.FontSize,
                             item.UseCrystalScreenMetrics, p.Run.Bold, p.Run.Italic, TextDpi(item))).Max();
-                        blocks.Append(CrystalDeviceText.Paragraph(item, html.ToString(), format, tabs, pitch));
+                        // A paragraph with a uniform font needs that font on its line box as well as its spans.
+                        // Otherwise the browser adds an invisible object-font baseline to every measured line.
+                        var basis = resolved[start].Run;
+                        var paragraphFont = pitch != null && item.CanGrow && item.UseCrystalScreenMetrics && basis.FontSize != item.FontSize
+                            && parts.All(p => p.Run.FontSize == basis.FontSize && p.Run.FontFamily == basis.FontFamily
+                                && p.Run.Bold == basis.Bold && p.Run.Italic == basis.Italic)
+                            ? FontStyle(basis.FontFamily, basis.FontSize, basis.Bold, basis.Italic, false, basis.Color, true, TextDpi(item)) : "";
+                        blocks.Append(CrystalDeviceText.Paragraph(item, html.ToString(), format, tabs, pitch, paragraphFont));
                     }
                     start = next;
                 }

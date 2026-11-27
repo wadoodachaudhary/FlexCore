@@ -80,6 +80,7 @@ public partial class GridControl<TValue>
 
         ResetToFirstPage();
         LogGridAction("Sorted", $"{column.Field} {(direction?.ToString() ?? "Cleared")}", column.Field);
+        RecordGridSortGraph(GetActiveSortDescriptors(), "ColumnMenu", column.Field, direction?.ToString() ?? "Cleared");
         if (EventsRef?.Sorted.HasDelegate == true)
         {
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs

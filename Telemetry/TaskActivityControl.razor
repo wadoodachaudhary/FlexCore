@@ -1,0 +1,436 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-task-root @ThemeClass">
+        <div class="fx-task-list">
+            <div class="fx-task-list-head">
+                <span class="fx-task-list-title">Tasks</span>
+                <ButtonControl CssClass="@PillCss(_usedOnly)" Tag="fx-task-used-only" OnClick="ToggleUsedOnly">Used only</ButtonControl>
+            </div>
+            <div class="fx-task-list-body">
+                @if (_report.Groups.Count == 0)
+                {
+                    <div class="fx-task-empty">No tasks are known and nothing was recorded in this period.</div>
+                }
+                else
+                {
+                    <AccordionControl Multiple="true" CssClass="fx-task-accordion">
+                        @foreach (var group in _report.Groups)
+                        {
+                            var g = group;
+                            <AccordionItemControl @key="g.Title" InitiallyExpanded="true">
+                                <HeaderContent>
+                                    <span class="fx-task-group-title">@g.Title</span>
+                                    <span class="fx-task-group-count">@g.Actions.ToString("N0")</span>
+                                </HeaderContent>
+                                <ChildContent>
+                                    @foreach (var item in VisibleItems(g))
+                                    {
+                                        var task = item;
+                                        <ButtonControl BareStyle="true"
+                                                       CssClass="@ItemCss(task)"
+                                                       Tag="@($"fx-task-item-{task.Title}")"
+                                                       Title="@ItemTip(task)"
+                                                       OnClick="() => Select(task)">
+                                            <span class="fx-task-item-name">@task.Title</span>
+                                            <span class="fx-task-item-count">@(task.Unused ? "not used" : task.Actions.ToString("N0"))</span>
+                                        </ButtonControl>
+                                    }
+                                    @if (!VisibleItems(g).Any())
+                                    {
+                                        <div class="fx-task-empty">Nothing used in this period.</div>
+                                    }
+                                </ChildContent>
+                            </AccordionItemControl>
+                        }
+                    </AccordionControl>
+                }
+            </div>
+        </div>
+
+        <div class="fx-task-detail">
+            @if (_selected is null)
+            {
+                <div class="fx-task-empty">Choose a task on the left to see how its functions are used.</div>
+            }
+            else
+            {
+                <div class="fx-task-detail-head">
+                    <span class="fx-task-detail-title">@_selected.Title</span>
+                    <span class="fx-task-muted">@_selected.Group</span>
+                    <span class="fx-task-spacer"></span>
+                    @if (_selected.LastUsedLocal is { } last)
+                    {
+                        <span class="fx-task-muted">Last used @last.ToString("yyyy-MM-dd HH:mm")</span>
+                    }
+                </div>
+
+                <div class="fx-task-kpis">
+                    <CardControl CssClass="fx-task-card" Elevation="1">
+                        <div class="fx-task-kpi-label">Started</div>
+                        <div class="fx-task-kpi-value">@_selected.Launches.ToString("N0")</div>
+                        <div class="fx-task-kpi-sub">from the task list or a menu</div>
+                    </CardControl>
+                    <CardControl CssClass="fx-task-card" Elevation="1">
+                        <div class="fx-task-kpi-label">Screens opened</div>
+                        <div class="fx-task-kpi-value">@_selected.Opens.ToString("N0")</div>
+                        <div class="fx-task-kpi-sub">@_selected.ActiveMinutes.ToString("N1") minutes in front</div>
+                    </CardControl>
+                    <CardControl CssClass="fx-task-card" Elevation="1">
+                        <div class="fx-task-kpi-label">Actions</div>
+                        <div class="fx-task-kpi-value">@_selected.Actions.ToString("N0")</div>
+                        <div class="fx-task-kpi-sub">@_selected.Functions.Count.ToString("N0") different functions</div>
+                    </CardControl>
+                    <CardControl CssClass="fx-task-card" Elevation="1">
+                        <div class="fx-task-kpi-label">Users</div>
+                        <div class="fx-task-kpi-value">@_selected.Users.ToString("N0")</div>
+                        <div class="fx-task-kpi-sub">@TopUserText(_selected)</div>
+                    </CardControl>
+                    <CardControl CssClass="fx-task-card" Elevation="1">
+                        <div class="fx-task-kpi-label">Errors</div>
+                        <div class="@(_selected.Errors > 0 ? "fx-task-kpi-value fx-task-kpi-warn" : "fx-task-kpi-value")">@_selected.Errors.ToString("N0")</div>
+                        <div class="fx-task-kpi-sub">unhandled, on this task's screens</div>
+                    </CardControl>
+                </div>
+
+                @if (_selected.Unused)
+                {
+                    <AlertControl Severity="AlertSeverity.Info">Nothing was recorded for this task in the selected period.</AlertControl>
+                }
+                else
+                {
+                    <div class="fx-task-bar">
+                        <ButtonControl CssClass="@PillCss(_view == "Functions")" Tag="fx-task-view-functions" OnClick='() => SetView("Functions")'>Functions (@_selected.Functions.Count)</ButtonControl>
+                        <ButtonControl CssClass="@PillCss(_view == "Areas")" Tag="fx-task-view-areas" OnClick='() => SetView("Areas")'>Parts of the screen (@_selected.Areas.Count)</ButtonControl>
+                        <ButtonControl CssClass="@PillCss(_view == "Users")" Tag="fx-task-view-users" OnClick='() => SetView("Users")'>Users (@_selected.UserRows.Count)</ButtonControl>
+                        @if (_view == "Functions")
+                        {
+                            <span class="fx-task-label">Show</span>
+                            @foreach (var kind in KindChoices)
+                            {
+                                var k = kind;
+                                <ButtonControl CssClass="@PillCss(_kind == k)" Tag="@($"fx-task-kind-{k}")" OnClick="() => SetKind(k)">@KindLabel(k)</ButtonControl>
+                            }
+                            <ButtonControl CssClass="@PillCss(_groupByArea)" Tag="fx-task-group-area" OnClick="ToggleGroupByArea">Group by part of the screen</ButtonControl>
+                        }
+                    </div>
+
+                    @if (_view == "Functions")
+                    {
+                        @if (_topBars.Count > 0)
+                        {
+                            <CardControl Title="Most used functions" CssClass="fx-task-card fx-task-chart" Elevation="1">
+                                <ChartControl Bars="@_topBars" ShowValues="true" ValueFormat="N0" BarColor="@BarColor" LabelStyle="min-width:230px;" />
+                            </CardControl>
+                        }
+                        <div class="fx-task-grid">
+                            <GridControl @key="@(_selected.Key + "|" + _groupByArea)"
+                                         TValue="FlexTaskFunctionRow"
+                                         Tag="fx-grid-task-functions"
+                                         DataSource="@FilteredFunctions"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         AllowGrouping="true"
+                                         GroupColumns="@_groupColumns"
+                                         HideGroupedColumns="true"
+                                         ShowGroupExpandCollapse="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.Area)" HeaderText="Part of the screen" Width="230px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.Function)" HeaderText="Function" Width="260px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.Kind)" HeaderText="Kind" Width="90px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.Count)" HeaderText="Times used" Width="100px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.SharePercent)" HeaderText="% of task" Width="90px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.Users)" HeaderText="Users" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.LastValue)" HeaderText="Latest value" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskFunctionRow.LastUsedLocal)" HeaderText="Last used" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    }
+                    else if (_view == "Areas")
+                    {
+                        @if (_areaBars.Count > 0)
+                        {
+                            <CardControl Title="Actions by part of the screen" CssClass="fx-task-card fx-task-chart" Elevation="1">
+                                <ChartControl Bars="@_areaBars" ShowValues="true" ValueFormat="N0" BarColor="@BarColor" LabelStyle="min-width:230px;" />
+                            </CardControl>
+                        }
+                        <div class="fx-task-grid">
+                            <GridControl @key="@(_selected.Key + "|areas")"
+                                         TValue="FlexTaskAreaRow"
+                                         Tag="fx-grid-task-areas"
+                                         DataSource="@_selected.Areas"
+                                         AllowSorting="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTaskAreaRow.Area)" HeaderText="Part of the screen" Width="340px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskAreaRow.Count)" HeaderText="Actions" Width="100px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskAreaRow.Functions)" HeaderText="Functions used" Width="120px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="fx-task-grid">
+                            <GridControl @key="@(_selected.Key + "|users")"
+                                         TValue="FlexTaskUserRow"
+                                         Tag="fx-grid-task-users"
+                                         DataSource="@_selected.UserRows"
+                                         AllowSorting="true"
+                                         AllowResizing="true"
+                                         AllowSelection="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(FlexTaskUserRow.UserId)" HeaderText="User" Width="180px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskUserRow.Launches)" HeaderText="Started" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskUserRow.Opens)" HeaderText="Screens opened" Width="120px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskUserRow.Actions)" HeaderText="Actions" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(FlexTaskUserRow.LastUsedLocal)" HeaderText="Last used" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    }
+                }
+            }
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    private static readonly string[] KindChoices = { "All", "Button", "Field", "Grid", "Menu", "Tab" };
+    private static readonly List<string> AreaGrouping = new() { nameof(FlexTaskFunctionRow.Area) };
+    private static readonly List<string> NoGrouping = new();
+
+    [Parameter] public string Title { get; set; } = "TaskActivity";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+
+    /// <summary>The events to sort under the task list. When null the control reads the last
+    /// <see cref="DaysBack"/> days from the registered data source itself.</summary>
+    [Parameter] public IReadOnlyList<FlexTelemetryEvent>? Events { get; set; }
+
+    /// <summary>The task list. When null it comes from the registered catalog provider; a host
+    /// without one gets its known screens, by module.</summary>
+    [Parameter] public IReadOnlyList<TelemetryTaskGroup>? Groups { get; set; }
+
+    [Parameter] public string? UserId { get; set; }
+    [Parameter] public string? Tenant { get; set; }
+    [Parameter] public int DaysBack { get; set; } = 30;
+
+    private FlexTaskActivityReport _report = new();
+    private FlexTaskActivity? _selected;
+    private IReadOnlyList<FlexTelemetryEvent>? _builtFrom;
+    private string? _builtUser;
+    private bool _built;
+    private bool _usedOnly;
+    private bool _groupByArea = true;
+    private string _view = "Functions";
+    private string _kind = "All";
+    private List<string> _groupColumns = AreaGrouping;
+    private readonly List<ChartControl.ChartBar> _topBars = new();
+    private readonly List<ChartControl.ChartBar> _areaBars = new();
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("TaskActivityControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    /// <summary>The report the control is showing.</summary>
+    public FlexTaskActivityReport Report => _report;
+
+    /// <summary>The task whose functions are shown on the right.</summary>
+    public FlexTaskActivity? SelectedTask => _selected;
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-task-theme-dark",
+        TelemetryTheme.ModernLight => "fx-task-theme-light",
+        _ => "fx-task-theme-vb"
+    };
+
+    private string BarColor => Theme == TelemetryTheme.VBClassic ? "#0a246a" : "#38bdf8";
+
+    private IReadOnlyList<FlexTaskFunctionRow> FilteredFunctions =>
+        _selected is null
+            ? Array.Empty<FlexTaskFunctionRow>()
+            : _kind == "All"
+                ? _selected.Functions
+                : _selected.Functions.Where(f => string.Equals(f.Kind, _kind, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    protected override void OnInitialized() => RegisterControlPresence();
+
+    protected override void OnParametersSet()
+    {
+        if (_built && ReferenceEquals(_builtFrom, Events) && string.Equals(_builtUser, UserId, StringComparison.OrdinalIgnoreCase))
+            return;
+        Rebuild();
+    }
+
+    /// <summary>Reads the events again (when the control loads them itself) and sorts them anew.</summary>
+    public void Refresh()
+    {
+        Rebuild();
+        StateHasChanged();
+    }
+
+    private void Rebuild()
+    {
+        var catalog = Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider;
+        var events = Events;
+        if (events is null && Services.GetService(typeof(ITelemetryDataSource)) is ITelemetryDataSource ds)
+            events = ds.QueryEvents(DateTime.UtcNow.AddDays(-Math.Max(1, DaysBack)), Tenant);
+
+        _report = FlexTaskActivityEngine.Build(
+            events ?? Array.Empty<FlexTelemetryEvent>(),
+            Groups ?? ResolveGroups(catalog),
+            catalog,
+            UserId);
+        _builtFrom = Events;
+        _builtUser = UserId;
+        _built = true;
+
+        var key = _selected?.Key;
+        _selected = _report.AllItems.FirstOrDefault(i => i.Key == key)
+            ?? _report.AllItems.OrderByDescending(i => i.Actions).ThenByDescending(i => i.Opens).FirstOrDefault();
+        RebuildBars();
+    }
+
+    private static IReadOnlyList<TelemetryTaskGroup> ResolveGroups(ITelemetryCatalogProvider? catalog)
+    {
+        if (catalog is null)
+            return Array.Empty<TelemetryTaskGroup>();
+        var groups = catalog.GetTaskGroups();
+        if (groups.Count > 0)
+            return groups;
+        return catalog.GetKnownScreens()
+            .GroupBy(s => string.IsNullOrWhiteSpace(s.Module) ? "Screens" : s.Module)
+            .Select(m => new TelemetryTaskGroup(
+                m.Key,
+                m.Select(s => new TelemetryTaskItem(s.Title, new[] { s.RouteKey })).ToList()))
+            .ToList();
+    }
+
+    private IEnumerable<FlexTaskActivity> VisibleItems(FlexTaskActivityGroup group) =>
+        _usedOnly ? group.Items.Where(i => !i.Unused) : group.Items;
+
+    private void Select(FlexTaskActivity task)
+    {
+        _selected = task;
+        _kind = "All";
+        RebuildBars();
+        RecordControlAction("TaskSelected", task.Title);
+    }
+
+    private void ToggleUsedOnly()
+    {
+        _usedOnly = !_usedOnly;
+        RecordControlAction("UsedOnlyChanged", _usedOnly ? "On" : "Off");
+    }
+
+    private void ToggleGroupByArea()
+    {
+        _groupByArea = !_groupByArea;
+        _groupColumns = _groupByArea ? AreaGrouping : NoGrouping;
+        RecordControlAction("GroupByAreaChanged", _groupByArea ? "On" : "Off");
+    }
+
+    private void SetView(string view)
+    {
+        _view = view;
+        RecordControlAction("ViewChanged", view);
+    }
+
+    private void SetKind(string kind)
+    {
+        _kind = kind;
+        RebuildBars();
+        RecordControlAction("KindChanged", kind);
+    }
+
+    private void RebuildBars()
+    {
+        _topBars.Clear();
+        _areaBars.Clear();
+        if (_selected is null)
+            return;
+        foreach (var f in FilteredFunctions.Take(10))
+            _topBars.Add(new ChartControl.ChartBar(f.Area == FlexTaskActivityEngine.MainArea ? f.Function : $"{f.Function} ({f.Area})", f.Count));
+        foreach (var a in _selected.Areas.Take(10))
+            _areaBars.Add(new ChartControl.ChartBar(a.Area, a.Count));
+    }
+
+    /// <summary>The selected task's functions as CSV, for the host's export button.</summary>
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Group,Task,PartOfScreen,Function,Kind,TimesUsed,PercentOfTask,Users,LatestValue,LastUsed");
+        var tasks = _selected is null ? _report.AllItems : new[] { _selected };
+        foreach (var t in tasks)
+        {
+            foreach (var f in t.Functions)
+                sb.AppendLine($"{Csv(t.Group)},{Csv(t.Title)},{Csv(f.Area)},{Csv(f.Function)},{Csv(f.Kind)},{f.Count},{f.SharePercent.ToString("0.0", CultureInfo.InvariantCulture)},{f.Users},{Csv(f.LastValue)},{Csv(f.LastUsedLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))}");
+        }
+        return ("task-functions", sb.ToString());
+    }
+
+    private static string TopUserText(FlexTaskActivity task)
+    {
+        var top = task.UserRows.FirstOrDefault();
+        return top is null || top.Actions == 0 ? "no actions yet" : $"most active: {top.UserId} ({top.Actions:N0})";
+    }
+
+    private static string ItemTip(FlexTaskActivity task) =>
+        task.Unused
+            ? "Not used in this period"
+            : $"Started {task.Launches:N0} · opened {task.Opens:N0} · {task.Actions:N0} actions · {task.Users:N0} users";
+
+    private string ItemCss(FlexTaskActivity task)
+    {
+        var css = "fx-task-item";
+        if (ReferenceEquals(task, _selected) || task.Key == _selected?.Key)
+            css += " fx-task-item-active";
+        if (task.Unused)
+            css += " fx-task-item-unused";
+        return css;
+    }
+
+    private static string KindLabel(string kind) => kind switch
+    {
+        "All" => "All",
+        "Button" => "Buttons",
+        "Field" => "Fields",
+        "Grid" => "Grid actions",
+        "Menu" => "Menus",
+        "Tab" => "Tabs",
+        _ => kind
+    };
+
+    private static string PillCss(bool active) => active ? "fx-task-pill fx-task-pill-active" : "fx-task-pill";
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+}

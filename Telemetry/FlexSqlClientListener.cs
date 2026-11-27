@@ -77,6 +77,7 @@ public sealed class FlexSqlClientListener : IObserver<DiagnosticListener>, IObse
             return;
 
         var id = Read<Guid?>(payload, "OperationId") ?? Guid.Empty;
+        Gauge(what, payload);
         if (what.EndsWith("Before", StringComparison.Ordinal))
         {
             if (id != Guid.Empty)
@@ -122,6 +123,65 @@ public sealed class FlexSqlClientListener : IObserver<DiagnosticListener>, IObse
             var rolledBack = _rollbacks.TryRemove(id, out _) || what.StartsWith("WriteTransactionRollback", StringComparison.Ordinal);
             var committed = !rolledBack && !failed;
             FlexSqlRecorder.Transaction(Source, committed, elapsed, 0, error, Context(connection));
+        }
+    }
+
+    /// <summary>
+    /// The live gauges, kept for every connection whoever reports its statements: statements running now,
+    /// connections open now, and at a close what the provider counted on the connection (bytes, rows).
+    /// </summary>
+    private void Gauge(string what, object payload)
+    {
+        if (what.StartsWith("WriteCommand", StringComparison.Ordinal))
+        {
+            FlexSqlLiveMeter.StatementRunning(what.EndsWith("Before", StringComparison.Ordinal) ? 1 : -1);
+        }
+        else if (what == "WriteConnectionOpenAfter")
+        {
+            FlexSqlLiveMeter.ConnectionOpen(1);
+            var connection = Read<DbConnection>(payload, "Connection");
+            if (connection is not null)
+                ProviderStatistics.Enable(connection);
+        }
+        else if (what == "WriteConnectionCloseBefore")
+        {
+            FlexSqlLiveMeter.ConnectionOpen(-1);
+            var connection = Read<DbConnection>(payload, "Connection");
+            if (connection is null || !ProviderStatistics.TryRead(connection, out var stats))
+                return;
+            var ambient = FlexSqlRecorder.TrackedContext(connection) ?? Context(connection);
+            // A connection whose owner reports its own statements has had its rows counted with them.
+            FlexSqlRecorder.ConnectionClosed(Source, SafeDatabase(connection), stats.BytesReceived, stats.BytesSent,
+                stats.SelectRows, stats.IduRows, countRows: !Skip(connection), ambient);
+        }
+    }
+
+    /// <summary>The provider's own per-connection counters, read by name so the library needs no provider reference.</summary>
+    private static class ProviderStatistics
+    {
+        private static readonly ConcurrentDictionary<Type, (System.Reflection.PropertyInfo? Enabled, System.Reflection.MethodInfo? Retrieve)> Members = new();
+
+        private static (System.Reflection.PropertyInfo? Enabled, System.Reflection.MethodInfo? Retrieve) Of(DbConnection connection) =>
+            Members.GetOrAdd(connection.GetType(), t => (t.GetProperty("StatisticsEnabled"), t.GetMethod("RetrieveStatistics", Type.EmptyTypes)));
+
+        public static void Enable(DbConnection connection)
+        {
+            var enabled = Of(connection).Enabled;
+            if (enabled is { CanWrite: true } && enabled.PropertyType == typeof(bool))
+                enabled.SetValue(connection, true);
+        }
+
+        public static bool TryRead(DbConnection connection, out (long BytesReceived, long BytesSent, long SelectRows, long IduRows) stats)
+        {
+            stats = default;
+            var (enabled, retrieve) = Of(connection);
+            if (retrieve is null || enabled?.GetValue(connection) is not true)
+                return false;
+            if (retrieve.Invoke(connection, null) is not System.Collections.IDictionary values)
+                return false;
+            long Value(string key) => values.Contains(key) && values[key] is { } v ? Convert.ToInt64(v) : 0;
+            stats = (Value("BytesReceived"), Value("BytesSent"), Value("SelectRows"), Value("IduRows"));
+            return true;
         }
     }
 

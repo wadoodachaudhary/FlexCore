@@ -110,7 +110,7 @@ public sealed partial class ReportLayoutSession
         // A date group's name field with its own date components captures the period's date. Without a field format it reads
         // as the group's name does ("1/2003", "2003"), never as a day its page does not print.
         return value is DateTime && string.IsNullOrEmpty(element.FormatString) && GroupPeriodDate(element.Binding, row) is ({ }, var kind)
-            ? (text, value, GroupDateExportFormat(kind)) : (text, value, element.FormatString);
+            ? (text, value, GroupDateExportFormat(kind)) : (text, value, EffectiveValueFormat(element.FormatString, value));
     }
 
     // Summary fields and group labels can indirectly read formulas too. Refuse print-state/page values rather

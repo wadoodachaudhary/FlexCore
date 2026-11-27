@@ -12,6 +12,12 @@ public interface ITelemetryCatalogProvider
     IReadOnlyList<TelemetryCatalogScreen> GetKnownScreens();
     IReadOnlyList<TelemetryCatalogTask> GetKnownTasksAndReports();
     (string ScreenTitle, string Module) ResolveScreenInfo(string route, string fallbackScreenTitle);
+
+    /// <summary>
+    /// The host's task list, section by section, as its users see it. <see cref="TaskActivityControl"/>
+    /// sorts recorded activity under it. A host without one returns nothing and gets its known screens by module.
+    /// </summary>
+    IReadOnlyList<TelemetryTaskGroup> GetTaskGroups() => Array.Empty<TelemetryTaskGroup>();
 }
 
 /// <summary>
@@ -120,6 +126,16 @@ public sealed class FlexSqlTelemetryStore : IFlexSqlTelemetryProvider
     /// <summary>Hourly counters per table, screen, user and kind; they outlive the statements in the ring buffers.</summary>
     public FlexSqlRollup Rollup { get; } = new();
 
+    /// <summary>Per-minute counters of the last hours, for the live view.</summary>
+    public FlexSqlLiveMeter Live { get; } = new();
+
+    /// <summary>Counts an event in the hourly and per-minute counters without listing it among the statements.</summary>
+    public void Count(FlexSqlTelemetryEntry entry)
+    {
+        Rollup.Add(entry);
+        Live.Add(entry);
+    }
+
     /// <summary>
     /// A session's own ring is dropped once it has recorded nothing for this long (a closed circuit never
     /// records again); its statements stay in the global ring, which a session lookup then reads.
@@ -141,6 +157,7 @@ public sealed class FlexSqlTelemetryStore : IFlexSqlTelemetryProvider
             return;
 
         Rollup.Add(entry);
+        Live.Add(entry);
 
         _global.Enqueue(entry);
         if (Interlocked.Increment(ref _globalCount) > _maxGlobalEntries)

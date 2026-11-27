@@ -1,0 +1,676 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@implements IAsyncDisposable
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+@using Microsoft.JSInterop
+
+@inject IServiceProvider Services
+@inject IJSRuntime JSRuntime
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-ca-root @ThemeClass">
+        @if (EffectiveShowChrome)
+        {
+            <ToolbarControl CssClass="fx-tel-toolbar" ShowCaptions="true" ShowCaptionsToggle="false" Tag="fx-ca-toolbar">
+                <ChildContent>
+                    <ToolbarButtonControl Label="Refresh Captures"
+                                          Title="Flush server-side FlexKit control & custom graph buffers and recalculate capture counts"
+                                          Tag="fx-ca-refresh"
+                                          OnClick="RefreshStandaloneAsync" />
+                    <ToolbarButtonControl Label="@(_showSandbox ? "Hide Live Grid Sandbox" : "Try Live Grid Captures")"
+                                          Title="Open interactive GridControl sandbox to exercise Sort, Find, Drag, Multi-Select Edit, and custom graph scopes"
+                                          Tag="fx-ca-toggle-sandbox"
+                                          OnClick="() => _showSandbox = !_showSandbox" />
+                    <ToolbarButtonControl Label="Export Capture Counts CSV"
+                                          Title="Export custom analytics capture count rollups to CSV"
+                                          Tag="fx-ca-export-csv"
+                                          OnClick="() => ExportCsvAsync()" />
+                </ChildContent>
+                <TrailingContent>
+                    <div class="fx-ca-toolbar-right">
+                        <span class="fx-tel-subbar-label">Window:</span>
+                        @foreach (var wp in WindowPresets)
+                        {
+                            var p = wp;
+                            <ButtonControl CssClass="@PillCss(_standaloneWindowKey == p.Key)"
+                                           Tag="@($"fx-ca-win-{p.Key}")"
+                                           OnClick="() => SelectWindowPreset(p)">
+                                @p.Label
+                            </ButtonControl>
+                        }
+                        <DropDownListControl TValue="TelemetryTheme" TItem="ThemeChoice"
+                                             Tag="fx-ca-theme"
+                                             DataSource="@ThemeChoices"
+                                             Value="@EffectiveTheme"
+                                             ValueChanged="OnThemeChangedAsync"
+                                             ValueFieldName="@nameof(ThemeChoice.Value)"
+                                             TextFieldName="@nameof(ThemeChoice.Label)"
+                                             Width="145px"
+                                             SuppressUnchangedValueChange="true" />
+                    </div>
+                </TrailingContent>
+            </ToolbarControl>
+        }
+
+        <div class="fx-tel-scroll-pane fx-ca-body">
+            @* ── 6 Capture Count KPI Cards ── *@
+            <div class="fx-tel-kpi-grid">
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-cyan" Elevation="1">
+                    <div class="fx-tel-kpi-label">1. Grid Sort Captures</div>
+                    <div class="fx-tel-kpi-value fx-tel-val-cyan">@ActiveData.GridSortCount.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">@ActiveData.MultiSortCount.ToString("N0") multi-column · max @ActiveData.MaxSortLevels level(s)</div>
+                </CardControl>
+
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-blue" Elevation="1">
+                    <div class="fx-tel-kpi-label">2. Grid Find Captures</div>
+                    <div class="fx-tel-kpi-value">@ActiveData.GridFindCount.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">@ActiveData.FindMatchedCount.ToString("N0") matched · @ActiveData.TotalFindMatchedRows.ToString("N0") rows found</div>
+                </CardControl>
+
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-amber" Elevation="1">
+                    <div class="fx-tel-kpi-label">3. Grid Drag Captures</div>
+                    <div class="fx-tel-kpi-value">@ActiveData.GridDragCount.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">@ActiveData.RangeSelectDragCount range-select · @ActiveData.RowReorderDragCount reorder · @ActiveData.ColumnOrGroupDragCount col/group</div>
+                </CardControl>
+
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-emerald" Elevation="1">
+                    <div class="fx-tel-kpi-label">4. Grid Multi-Select Edits</div>
+                    <div class="fx-tel-kpi-value fx-tel-val-emerald">@ActiveData.GridMultiSelectEditCount.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">@ActiveData.TotalBatchUpdatedCells.ToString("N0") total cells batch-updated</div>
+                </CardControl>
+
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-violet" Elevation="1">
+                    <div class="fx-tel-kpi-label">Rows Selected in Batch Edits</div>
+                    <div class="fx-tel-kpi-value fx-tel-val-violet">@ActiveData.TotalBatchSelectedRows.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">Avg @ActiveData.AvgBatchRowsPerEdit.ToString("0.0") · Max @ActiveData.MaxBatchRowsInSingleEdit.ToString("N0") rows/edit</div>
+                </CardControl>
+
+                <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-rose" Elevation="1">
+                    <div class="fx-tel-kpi-label">Chained Graph Captures</div>
+                    <div class="fx-tel-kpi-value">@ActiveData.TotalCustomCaptures.ToString("N0")</div>
+                    <div class="fx-tel-kpi-sub">@ActiveData.ChainedDragToEditCount.ToString("N0") Drag → Batch-Edit chains · @ActiveData.DistinctEventNames event types</div>
+                </CardControl>
+            </div>
+
+            @* ── Event Filter Bar + Sandbox Toggle ── *@
+            <div class="fx-tel-subbar">
+                <div class="fx-tel-pill-group">
+                    <span class="fx-tel-subbar-label">Capture Category:</span>
+                    <ButtonControl CssClass="@PillCss(_eventFilter == "All")" Tag="fx-ca-flt-all" OnClick='() => SelectEventFilter("All")'>
+                        All (@ActiveData.TotalCustomCaptures)
+                    </ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_eventFilter == FlexCustomAnalyticsEvents.GridSort)" Tag="fx-ca-flt-sort" OnClick="() => SelectEventFilter(FlexCustomAnalyticsEvents.GridSort)">
+                        1. Grid.Sort (@ActiveData.GridSortCount)
+                    </ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_eventFilter == FlexCustomAnalyticsEvents.GridFind)" Tag="fx-ca-flt-find" OnClick="() => SelectEventFilter(FlexCustomAnalyticsEvents.GridFind)">
+                        2. Grid.Find (@ActiveData.GridFindCount)
+                    </ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_eventFilter == FlexCustomAnalyticsEvents.GridDrag)" Tag="fx-ca-flt-drag" OnClick="() => SelectEventFilter(FlexCustomAnalyticsEvents.GridDrag)">
+                        3. Grid.Drag (@ActiveData.GridDragCount)
+                    </ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_eventFilter == FlexCustomAnalyticsEvents.GridMultiSelectEdit)" Tag="fx-ca-flt-msedit" OnClick="() => SelectEventFilter(FlexCustomAnalyticsEvents.GridMultiSelectEdit)">
+                        4. Grid.MultiSelectEdit (@ActiveData.GridMultiSelectEditCount)
+                    </ButtonControl>
+                    @if (ActiveData.OtherCustomEventCount > 0)
+                    {
+                        <ButtonControl CssClass="@PillCss(_eventFilter == "Other")" Tag="fx-ca-flt-other" OnClick='() => SelectEventFilter("Other")'>
+                            Custom Domain Events (@ActiveData.OtherCustomEventCount)
+                        </ButtonControl>
+                    }
+                </div>
+
+                <div class="fx-tel-pill-group">
+                    @if (!EffectiveShowChrome)
+                    {
+                        <ButtonControl CssClass="@PillCss(_showSandbox)"
+                                       Tag="fx-ca-inline-sandbox"
+                                       OnClick="() => _showSandbox = !_showSandbox">
+                            @(_showSandbox ? "▾ Hide Live Grid Sandbox" : "▸ Try Live Grid & Graph API Sandbox")
+                        </ButtonControl>
+                    }
+                    @if (_selectedEvent is not null)
+                    {
+                        <ButtonControl CssClass="fx-tel-pill"
+                                       Tag="fx-ca-clear-selected-graph"
+                                       OnClick="() => _selectedEvent = null">
+                            ✕ Show Aggregated Graph
+                        </ButtonControl>
+                    }
+                </div>
+            </div>
+
+            @* ── Interactive Live Grid & Custom Graph API Sandbox ── *@
+            @if (_showSandbox)
+            {
+                <CardControl Title="Interactive Grid & Custom Telemetry Graph Sandbox (Live Server Capture — Zero Extra Round Trips)"
+                             CssClass="fx-tel-card fx-ca-sandbox-card"
+                             Elevation="1">
+                    <div class="fx-ca-sandbox-actions">
+                        <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active"
+                                       Tag="fx-ca-demo-sort"
+                                       OnClick="RunDemoMultiSortAsync">
+                            1. Trigger Multi-Column Sort
+                        </ButtonControl>
+                        <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active"
+                                       Tag="fx-ca-demo-find"
+                                       OnClick="RunDemoGridFindAsync">
+                            2. Trigger Grid Find ("*Cabinet*")
+                        </ButtonControl>
+                        <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active"
+                                       Tag="fx-ca-demo-drag-reorder"
+                                       OnClick="RunDemoDragReorderAsync">
+                            3a. Trigger Row Drag Reorder
+                        </ButtonControl>
+                        <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active"
+                                       Tag="fx-ca-demo-drag-batch"
+                                       OnClick="RunDemoChainedDragAndBatchEditAsync">
+                            3b + 4. Drag-Select 4 Rows → Multi-Select Batch Edit
+                        </ButtonControl>
+                        <ButtonControl CssClass="fx-tel-pill"
+                                       Tag="fx-ca-demo-custom-scope"
+                                       OnClick="RunDemoCustomDomainGraphAsync">
+                            + Custom IFlexCustomAnalytics Graph
+                        </ButtonControl>
+                        @if (!string.IsNullOrWhiteSpace(_sandboxStatus))
+                        {
+                            <span class="fx-ca-sandbox-status">@_sandboxStatus</span>
+                        }
+                    </div>
+
+                    <div class="fx-ca-sandbox-grid">
+                        <GridControl @ref="_sandboxGrid"
+                                     TValue="SandboxOrderItem"
+                                     Tag="fx-ca-demo-grid"
+                                     DataSource="@_sandboxRows"
+                                     SelectionSettingsRef="@_sandboxSelection"
+                                     EditSettingsRef="@_sandboxEdit"
+                                     AllowSorting="true"
+                                     AllowMultiSorting="true"
+                                     AllowGrouping="true"
+                                     AllowRowReorder="true"
+                                     AllowColumnReorder="true"
+                                     AllowRowDragSelection="true"
+                                     ShowSearchBar="true"
+                                     AllowResizing="true"
+                                     EnableHover="true"
+                                     Height="215px"
+                                     WidthMode="GridWidthMode.FillAvailable">
+                            <GridColumnsBase>
+                                <GridColumn Field="@nameof(SandboxOrderItem.LineNo)" HeaderText="Line" Width="65px" IsPrimaryKey="true" AllowEditing="false" />
+                                <GridColumn Field="@nameof(SandboxOrderItem.Category)" HeaderText="Category" Width="140px" />
+                                <GridColumn Field="@nameof(SandboxOrderItem.ItemDescription)" HeaderText="Item Description" Width="220px" />
+                                <GridColumn Field="@nameof(SandboxOrderItem.Status)" HeaderText="Batch Status" Width="145px" />
+                                <GridColumn Field="@nameof(SandboxOrderItem.Quantity)" HeaderText="Qty" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(SandboxOrderItem.UnitCost)" HeaderText="Unit Cost" Width="105px" Type="ColumnType.Number" Format="N2" TextAlign="TextAlign.Right" />
+                            </GridColumnsBase>
+                        </GridControl>
+                    </div>
+                </CardControl>
+            }
+
+            @* ── Capture Counts Bar Chart + Directed Interaction Graph Visualizer ── *@
+            <div class="fx-tel-charts-row fx-tel-charts-two">
+                <CardControl Title="Capture Counts by Feature & Sub-Type" CssClass="fx-tel-card" Elevation="1">
+                    @if (CountBars.Count > 0)
+                    {
+                        <ChartControl Bars="@CountBars"
+                                      ShowValues="true"
+                                      ValueFormat="N0"
+                                      BarColor="@(EffectiveTheme == TelemetryTheme.VBClassic ? "#0a246a" : "#38bdf8")"
+                                      LabelStyle="min-width:225px;" />
+                    }
+                    else
+                    {
+                        <div class="fx-tel-empty">
+                            No custom analytics captures recorded yet in @ActiveData.TimeWindowLabel. Sort, Find, Drag, or Multi-Select Edit any FlexKit GridControl (or click "Try Live Grid Captures") to populate counts immediately.
+                        </div>
+                    }
+                </CardControl>
+
+                @{
+                    var graphView = ActiveGraphFlow;
+                    var graphCardTitle = _selectedEvent is not null
+                        ? $"Directed Graph: {_selectedEvent.EventName} ({_selectedEvent.SubKind}) — op:{_selectedEvent.OperationId}"
+                        : $"Aggregated Interaction Graph Topology ({(_eventFilter == "All" ? "All Captures" : _eventFilter)})";
+                }
+                <CardControl Title="@graphCardTitle" CssClass="fx-tel-card" Elevation="1">
+                    <PathFlowControl Nodes="@graphView.Nodes"
+                                     Links="@graphView.Links"
+                                     StageTitles="@graphView.StageTitles"
+                                     Height="250px"
+                                     EmptyMessage="Interaction graph nodes & edges appear here as Grid Sort, Find, Drag, Multi-Select Edit, or custom IFlexCustomAnalytics operations run." />
+                </CardControl>
+            </div>
+
+            @* ── Capture Counts Summary Rollup Grid ── *@
+            <CardControl Title="@($"Capture Counts Rollup ({FilteredCountRows.Count} distinct operation types)")" CssClass="fx-tel-card" Elevation="1">
+                <div class="fx-ca-rollup-grid">
+                    <GridControl TValue="CustomEventCountRow"
+                                 Tag="fx-ca-counts-grid"
+                                 DataSource="@FilteredCountRows"
+                                 AllowSorting="true"
+                                 AllowFiltering="true"
+                                 AllowResizing="true"
+                                 EnableHover="true"
+                                 Height="225px"
+                                 WidthMode="GridWidthMode.FillAvailable">
+                        <GridColumnsBase>
+                            <GridColumn Field="@nameof(CustomEventCountRow.EventName)" HeaderText="Custom Event" Width="175px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.SubKind)" HeaderText="Operation Mode / SubKind" Width="185px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.Category)" HeaderText="Category" Width="125px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.CaptureCount)" HeaderText="Capture Count" Width="118px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.TotalSelectedRows)" HeaderText="Total Selected Rows" Width="145px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.TotalUpdatedOrMatched)" HeaderText="Cells / Matches / Levels" Width="165px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.AvgPrimaryMetric)" HeaderText="Avg / Capture" Width="115px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.MaxPrimaryMetric)" HeaderText="Max Single" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.ChainedCount)" HeaderText="Chained Spans" Width="115px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.UniqueUsers)" HeaderText="Users" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.UniqueScreens)" HeaderText="Screens" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomEventCountRow.LastCapturedLocal)" HeaderText="Last Captured" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                        </GridColumnsBase>
+                    </GridControl>
+                </div>
+            </CardControl>
+
+            @* ── Captured Graph Event Stream + JSON Payload Inspector ── *@
+            <CardControl Title="@($"Captured Graph Operations ({FilteredCaptureRows.Count:N0} events — click a row to inspect its graph)")" CssClass="fx-tel-card" Elevation="1">
+                <div class="fx-ca-events-grid">
+                    <GridControl TValue="CustomCapturedEventRow"
+                                 Tag="fx-ca-events-grid"
+                                 DataSource="@FilteredCaptureRows"
+                                 EventsRef="@_eventsGridCallbacks"
+                                 ShowSearchBar="true"
+                                 AllowGrouping="true"
+                                 AllowSorting="true"
+                                 AllowFiltering="true"
+                                 AllowResizing="true"
+                                 AllowSelection="true"
+                                 EnableHover="true"
+                                 Height="250px"
+                                 WidthMode="GridWidthMode.FillAvailable">
+                        <GridColumnsBase>
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.TimestampLocal)" HeaderText="Timestamp" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss.fff" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.EventName)" HeaderText="Event" Width="165px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.SubKind)" HeaderText="Mode" Width="155px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.SelectedRows)" HeaderText="Selected Rows" Width="115px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.UpdatedOrMatched)" HeaderText="Effect Count" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.NodeCount)" HeaderText="Nodes" Width="72px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.EdgeCount)" HeaderText="Edges" Width="72px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.ParentOperationId)" HeaderText="Parent Span" Width="110px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.UserId)" HeaderText="User" Width="95px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.Screen)" HeaderText="Screen" Width="150px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.ControlId)" HeaderText="Control" Width="140px" AllowEditing="false" />
+                            <GridColumn Field="@nameof(CustomCapturedEventRow.Summary)" HeaderText="Graph Summary" Width="320px" AllowEditing="false" />
+                        </GridColumnsBase>
+                    </GridControl>
+                </div>
+
+                @{
+                    var inspected = _selectedEvent ?? FilteredCaptureRows.FirstOrDefault();
+                }
+                @if (inspected is not null)
+                {
+                    <div class="fx-ca-json-box">
+                        <div class="fx-ca-json-hdr">
+                            <span>
+                                <strong>@inspected.EventName</strong> · <code>op:@inspected.OperationId</code>
+                                @if (!string.IsNullOrWhiteSpace(inspected.ParentOperationId))
+                                {
+                                    <span> · Chained from <code>parent:@inspected.ParentOperationId</code></span>
+                                }
+                                · @inspected.NodeCount nodes, @inspected.EdgeCount edges
+                            </span>
+                            <span class="fx-ca-json-loc">@inspected.Location</span>
+                        </div>
+                        <pre class="fx-ca-json-pre">@inspected.GraphJsonIndented</pre>
+                    </div>
+                }
+            </CardControl>
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    public sealed record ThemeChoice(TelemetryTheme Value, string Label);
+    public sealed record WindowPreset(string Key, string Label, int DaysBack, int? MinutesBack);
+
+    public sealed class SandboxOrderItem
+    {
+        public int LineNo { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string ItemDescription { get; set; } = string.Empty;
+        public string Status { get; set; } = "Open";
+        public int Quantity { get; set; }
+        public decimal UnitCost { get; set; }
+    }
+
+    private static readonly List<ThemeChoice> ThemeChoices = new()
+    {
+        new(TelemetryTheme.VBClassic, "Style: VB Classic"),
+        new(TelemetryTheme.GrafanaDark, "Style: Grafana Dark"),
+        new(TelemetryTheme.ModernLight, "Style: Modern Light")
+    };
+
+    private static readonly WindowPreset[] WindowPresets =
+    {
+        new("1h", "1h", 1, 60),
+        new("24h", "24h", 1, 1440),
+        new("7d", "7d", 7, null),
+        new("30d", "30d", 30, null),
+        new("90d", "90d", 90, null)
+    };
+
+    [Parameter] public string Title { get; set; } = "CustomAnalytics";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public TelemetryTheme? DefaultTheme { get; set; }
+    [Parameter] public string ExportFilePrefix { get; set; } = "flexkit";
+    [Parameter] public EventCallback<TelemetryTheme> ThemeChanged { get; set; }
+    [Parameter] public FlexCustomAnalyticsSnapshot? CustomSnapshot { get; set; }
+    [Parameter] public string? Tenant { get; set; }
+    [Parameter] public string? SearchText { get; set; }
+    [Parameter] public bool? ShowChrome { get; set; }
+    [Parameter] public bool ShowSandboxByDefault { get; set; }
+    [Parameter] public EventCallback OnCapturesMutated { get; set; }
+
+    private GridControl<SandboxOrderItem>? _sandboxGrid;
+    private readonly SelectionSettings _sandboxSelection = new() { Type = SelectionType.Multiple, Mode = SelectionMode.Row };
+    private readonly EditSettings _sandboxEdit = new() { AllowEditing = true, Mode = EditMode.Batch };
+    private readonly GridControlEvents<CustomCapturedEventRow> _eventsGridCallbacks = new();
+    private readonly List<SandboxOrderItem> _sandboxRows = new()
+    {
+        new() { LineNo = 101, Category = "Cabinetry", ItemDescription = "Shaker Base Cabinet 36\"", Status = "Quoted", Quantity = 12, UnitCost = 245.00m },
+        new() { LineNo = 102, Category = "Cabinetry", ItemDescription = "Crown Wall Cabinet 30\"", Status = "Quoted", Quantity = 8, UnitCost = 189.50m },
+        new() { LineNo = 103, Category = "Flooring", ItemDescription = "White Oak Engineered Plank", Status = "Pending", Quantity = 450, UnitCost = 6.75m },
+        new() { LineNo = 104, Category = "Countertops", ItemDescription = "Calacatta Quartz Slab", Status = "Quoted", Quantity = 3, UnitCost = 980.00m },
+        new() { LineNo = 105, Category = "Cabinetry", ItemDescription = "Pantry Tall Cabinet 84\"", Status = "Pending", Quantity = 4, UnitCost = 410.00m },
+        new() { LineNo = 106, Category = "Lighting", ItemDescription = "Recessed LED Trim 4\"", Status = "Approved", Quantity = 24, UnitCost = 34.00m }
+    };
+
+    private BrowserInterop? _browserInterop;
+    private DefaultFlexTelemetryDataSource? _ownedFallbackSource;
+    private FlexCustomAnalyticsSnapshot? _standaloneSnapshot;
+    private TelemetryTheme? _localThemeOverride;
+    private string _standaloneWindowKey = "30d";
+    private int _standaloneDays = 30;
+    private int? _standaloneMinutes;
+    private string _eventFilter = "All";
+    private bool _showSandbox;
+    private bool _sandboxInitialized;
+    private string _sandboxStatus = string.Empty;
+    private int _demoCycle;
+    private CustomCapturedEventRow? _selectedEvent;
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("CustomAnalyticsControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    private TelemetryTheme EffectiveTheme => _localThemeOverride ?? DefaultTheme ?? Theme;
+    private bool EffectiveShowChrome => ShowChrome ?? (CustomSnapshot is null);
+    private FlexCustomAnalyticsSnapshot ActiveData => CustomSnapshot ?? _standaloneSnapshot ?? new FlexCustomAnalyticsSnapshot();
+
+    private string ThemeClass => EffectiveTheme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    public IReadOnlyList<CustomEventCountRow> FilteredCountRows =>
+        ActiveData.CountRows.Where(r => MatchesEventFilter(r.EventName)).ToList();
+
+    public IReadOnlyList<CustomCapturedEventRow> FilteredCaptureRows =>
+        ActiveData.RecentCaptures.Where(r => MatchesEventFilter(r.EventName)).ToList();
+
+    private List<ChartControl.ChartBar> CountBars =>
+        FilteredCountRows
+            .Take(10)
+            .Select(r => new ChartControl.ChartBar(
+                $"{r.EventName} · {r.SubKind}",
+                r.CaptureCount,
+                ResolveBarColor(r.EventName)))
+            .ToList();
+
+    private (IReadOnlyList<PathFlowNode> Nodes, IReadOnlyList<PathFlowLink> Links, IReadOnlyList<string> StageTitles) ActiveGraphFlow =>
+        _selectedEvent is not null
+            ? FlexCustomAnalyticsEngine.BuildPathFlowGraph(new[] { _selectedEvent })
+            : FlexCustomAnalyticsEngine.BuildPathFlowGraph(FilteredCaptureRows);
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+        if (!_sandboxInitialized)
+        {
+            _sandboxInitialized = true;
+            _showSandbox = ShowSandboxByDefault;
+        }
+        _eventsGridCallbacks.RowSelected = EventCallback.Factory.Create<RowSelectEventArgs<CustomCapturedEventRow>>(this, OnCaptureRowSelected);
+        if (CustomSnapshot is null)
+            RebuildStandaloneSnapshot();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (CustomSnapshot is null)
+            RebuildStandaloneSnapshot();
+    }
+
+    private void OnCaptureRowSelected(RowSelectEventArgs<CustomCapturedEventRow> args)
+    {
+        if (args.Data is not null)
+            _selectedEvent = args.Data;
+    }
+
+    private void SelectEventFilter(string filter)
+    {
+        _eventFilter = filter;
+        _selectedEvent = null;
+    }
+
+    private void SelectWindowPreset(WindowPreset preset)
+    {
+        _standaloneWindowKey = preset.Key;
+        _standaloneDays = preset.DaysBack;
+        _standaloneMinutes = preset.MinutesBack;
+        RebuildStandaloneSnapshot();
+    }
+
+    private async Task OnThemeChangedAsync(TelemetryTheme next)
+    {
+        _localThemeOverride = next;
+        if (ThemeChanged.HasDelegate)
+            await ThemeChanged.InvokeAsync(next);
+    }
+
+    public async Task RefreshStandaloneAsync()
+    {
+        var ds = ResolveDataSource();
+        try { await ds.FlushAsync(); } catch { }
+        RebuildStandaloneSnapshot();
+        if (OnCapturesMutated.HasDelegate)
+            await OnCapturesMutated.InvokeAsync();
+    }
+
+    public void RebuildStandaloneSnapshot()
+    {
+        var ds = ResolveDataSource();
+        var sinceUtc = _standaloneMinutes.HasValue
+            ? DateTime.UtcNow.AddMinutes(-_standaloneMinutes.Value)
+            : DateTime.UtcNow.AddDays(-_standaloneDays);
+        var events = ds.QueryEvents(sinceUtc, Tenant, Tenant ?? string.Empty, maxCount: 50_000);
+        _standaloneSnapshot = FlexCustomAnalyticsEngine.BuildSnapshot(events, new FlexTelemetryQueryFilter
+        {
+            Tenant = Tenant,
+            DaysBack = _standaloneDays,
+            MinutesBack = _standaloneMinutes,
+            SearchText = SearchText
+        }, Tenant ?? string.Empty);
+    }
+
+    // ── Interactive Live Sandbox Actions ─────────────────────────────────────
+
+    private async Task RunDemoMultiSortAsync()
+    {
+        if (_sandboxGrid is null) return;
+        _demoCycle++;
+        var dir = _demoCycle % 2 == 1 ? SortDirection.Descending : SortDirection.Ascending;
+        await _sandboxGrid.ApplySortDescriptorsAsync(new[]
+        {
+            new GridSortDescriptor(nameof(SandboxOrderItem.Category), SortDirection.Ascending),
+            new GridSortDescriptor(nameof(SandboxOrderItem.UnitCost), dir)
+        }, "MultiSortDialog");
+        _sandboxGrid.FlushControlLog();
+        _sandboxStatus = $"Captured Grid.Sort: Category ASC, UnitCost {dir} (2 levels)";
+        await RefreshAfterSandboxActionAsync();
+    }
+
+    private async Task RunDemoGridFindAsync()
+    {
+        if (_sandboxGrid is null) return;
+        var res = await _sandboxGrid.FindAsync("*Cabinet*", nameof(SandboxOrderItem.ItemDescription));
+        _sandboxGrid.FlushControlLog();
+        _sandboxStatus = $"Captured Grid.Find: match {res.MatchOrdinal} of {res.TotalMatches} (row {res.MatchedRowIndex + 1})";
+        await RefreshAfterSandboxActionAsync();
+    }
+
+    private async Task RunDemoDragReorderAsync()
+    {
+        if (_sandboxGrid is null) return;
+        await _sandboxGrid.DragReorderRowAsync(_sandboxRows.Count - 1, 0);
+        _sandboxGrid.FlushControlLog();
+        _sandboxStatus = "Captured Grid.Drag (RowReorder): moved bottom row to top";
+        await RefreshAfterSandboxActionAsync();
+    }
+
+    private async Task RunDemoChainedDragAndBatchEditAsync()
+    {
+        if (_sandboxGrid is null) return;
+        _demoCycle++;
+        var dragOpId = await _sandboxGrid.SelectRowDragRangeAsync(0, 3);
+        var nextStatus = _demoCycle % 2 == 1 ? "Batch Approved" : "Repriced (+5%)";
+        var updated = await _sandboxGrid.ApplyMultiSelectBatchEditAsync(nameof(SandboxOrderItem.Status), nextStatus, "DragThenBatchApply");
+        _sandboxGrid.FlushControlLog();
+        _sandboxStatus = $"Captured Chained Graph: Grid.Drag (4 rows, op:{dragOpId}) -> Grid.MultiSelectEdit ({updated} cells = '{nextStatus}')";
+        await RefreshAfterSandboxActionAsync();
+    }
+
+    private async Task RunDemoCustomDomainGraphAsync()
+    {
+        var customApi = Services.GetService(typeof(IFlexCustomAnalytics)) as IFlexCustomAnalytics
+                        ?? new FlexCustomAnalyticsService(Services.GetService(typeof(IFlexControlLogSink)) as IFlexControlLogSink);
+
+        using (var scope = customApi.BeginScope("Workflow.BulkQuoteApproval", "BusinessGraph", screen: Title, controlType: "ApprovalEngine", controlId: "QuoteBatchApprover"))
+        {
+            scope.Builder
+                 .WithSubKind("MultiLineApproval")
+                 .WithMetric(FlexCustomAnalyticsEvents.Metrics.SelectedRows, 4)
+                 .WithMetric(FlexCustomAnalyticsEvents.Metrics.UpdatedCells, 4)
+                 .WithTag("department", "Purchasing")
+                 .AddNode("selection", "QuoteSelection", "4 Selected Quote Lines", 4)
+                 .AddNode("rule", "MarginCheck", "Margin Validation Passed", 4)
+                 .AddNode("commit", "ApprovedPOs", "4 POs Generated", 4)
+                 .AddEdge("selection", "rule", "validates", 4)
+                 .AddEdge("rule", "commit", "approves", 4);
+            scope.Complete("Approved", "Approved 4 selected quote lines into POs via IFlexCustomAnalytics");
+        }
+
+        _sandboxStatus = "Captured Custom Domain Graph: Workflow.BulkQuoteApproval (3 nodes, 2 edges)";
+        await RefreshAfterSandboxActionAsync();
+    }
+
+    private async Task RefreshAfterSandboxActionAsync()
+    {
+        if (CustomSnapshot is null)
+            RebuildStandaloneSnapshot();
+        if (OnCapturesMutated.HasDelegate)
+            await OnCapturesMutated.InvokeAsync();
+        StateHasChanged();
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("EventName,SubKind,Category,CaptureCount,TotalSelectedRows,TotalEffectMetric,AvgPerCapture,MaxSingleCapture,ChainedCount,UniqueUsers,UniqueScreens,LastCaptured");
+        foreach (var r in FilteredCountRows)
+        {
+            sb.AppendLine($"{Csv(r.EventName)},{Csv(r.SubKind)},{Csv(r.Category)},{r.CaptureCount},{r.TotalSelectedRows.ToString("0.#", CultureInfo.InvariantCulture)},{r.TotalUpdatedOrMatched.ToString("0.#", CultureInfo.InvariantCulture)},{r.AvgPrimaryMetric.ToString("0.0", CultureInfo.InvariantCulture)},{r.MaxPrimaryMetric.ToString("0.#", CultureInfo.InvariantCulture)},{r.ChainedCount},{r.UniqueUsers},{r.UniqueScreens},{Csv(r.LastCapturedLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))}");
+        }
+        return ("custom-capture-counts", sb.ToString());
+    }
+
+    public async Task ExportCsvAsync(string? filePrefix = null)
+    {
+        var effectivePrefix = string.IsNullOrWhiteSpace(filePrefix) ? ExportFilePrefix : filePrefix;
+        var (suffix, csv) = BuildCurrentCsv();
+        var fileName = $"{effectivePrefix}-{suffix}-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv)).ToArray();
+
+        if (Services.GetService(typeof(ITelemetryExportHandler)) is ITelemetryExportHandler handler)
+        {
+            await handler.ExportBytesAsync(bytes, fileName, "text/csv");
+            return;
+        }
+
+        _browserInterop ??= new BrowserInterop(JSRuntime);
+        await _browserInterop.InvokeAsync<object?>("download", null, new { bytes, name = fileName, type = "text/csv" });
+    }
+
+    private ITelemetryDataSource ResolveDataSource()
+    {
+        if (Services.GetService(typeof(ITelemetryDataSource)) is ITelemetryDataSource registered)
+            return registered;
+
+        _ownedFallbackSource ??= new DefaultFlexTelemetryDataSource(
+            Services.GetService(typeof(IFlexControlLogSink)) as IFlexControlLogSink,
+            Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider);
+        return _ownedFallbackSource;
+    }
+
+    private bool MatchesEventFilter(string eventName)
+    {
+        if (_eventFilter == "All") return true;
+        if (_eventFilter == "Other")
+        {
+            return !string.Equals(eventName, FlexCustomAnalyticsEvents.GridSort, StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(eventName, FlexCustomAnalyticsEvents.GridFind, StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(eventName, FlexCustomAnalyticsEvents.GridDrag, StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(eventName, FlexCustomAnalyticsEvents.GridMultiSelectEdit, StringComparison.OrdinalIgnoreCase);
+        }
+        return string.Equals(eventName, _eventFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveBarColor(string eventName)
+    {
+        bool vb = EffectiveTheme == TelemetryTheme.VBClassic;
+        if (string.Equals(eventName, FlexCustomAnalyticsEvents.GridSort, StringComparison.OrdinalIgnoreCase))
+            return vb ? "#0a246a" : "#38bdf8";
+        if (string.Equals(eventName, FlexCustomAnalyticsEvents.GridFind, StringComparison.OrdinalIgnoreCase))
+            return vb ? "#3a6ea5" : "#60a5fa";
+        if (string.Equals(eventName, FlexCustomAnalyticsEvents.GridDrag, StringComparison.OrdinalIgnoreCase))
+            return vb ? "#8b5a00" : "#f59e0b";
+        if (string.Equals(eventName, FlexCustomAnalyticsEvents.GridMultiSelectEdit, StringComparison.OrdinalIgnoreCase))
+            return vb ? "#2e7d32" : "#10b981";
+        return vb ? "#6a1b9a" : "#a855f7";
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _ownedFallbackSource?.Dispose();
+        if (_browserInterop is not null)
+            await _browserInterop.DisposeAsync();
+    }
+}

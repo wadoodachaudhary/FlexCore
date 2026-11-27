@@ -433,3 +433,29 @@
     border-left: 2px solid #93b8e8;
     font-variant-numeric: tabular-nums;
 }
+
+/* ── Sort buttons ──
+   The header and chip sort buttons are ButtonControl children, so they are reached
+   through ::deep; without it they keep the browser's own button chrome. */
+.fx-pivot-table th ::deep button,
+.fx-pivot-field-chip ::deep button:not(.fx-pivot-chip-remove) {
+    appearance: none;
+    background: none;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    text-align: inherit;
+    cursor: pointer;
+}
+
+.fx-pivot-table th ::deep button {
+    width: 100%;
+}
+
+.fx-pivot-table th ::deep button:focus-visible,
+.fx-pivot-field-chip ::deep button:not(.fx-pivot-chip-remove):focus-visible {
+    outline: 1px dotted currentColor;
+    outline-offset: 1px;
+}

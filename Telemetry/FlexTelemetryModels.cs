@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Fx.ControlKit.Logging;
 using Microsoft.AspNetCore.Components;
 
 namespace Fx.ControlKit.Telemetry;
@@ -357,17 +358,23 @@ public sealed class FlexTelemetryEventRow
 
     public string TimeText => EffectiveLocal.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
 
-    public TelemetryLogTypeKey LogType => ClassifyLogType(Kind, Level);
+    public TelemetryLogTypeKey LogType => ClassifyLogType(Kind, Level, Detail);
 
     public string Summary => BuildSummary();
 
-    public static TelemetryLogTypeKey ClassifyLogType(string? kind, string? level)
+    public string CleanDetail =>
+        FlexCustomAnalyticsCodec.TryUnpack(Detail, out var human, out _) ? human : Detail;
+
+    public static TelemetryLogTypeKey ClassifyLogType(string? kind, string? level, string? detail = null)
     {
         if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase)
             || string.Equals(kind, "UnhandledError", StringComparison.OrdinalIgnoreCase))
         {
             return new TelemetryLogTypeKey(1, "Error / Exception");
         }
+
+        if (FlexCustomAnalyticsCodec.ContainsGraph(detail))
+            return new TelemetryLogTypeKey(4, "Custom / Grid Graph");
 
         return (kind ?? string.Empty) switch
         {
@@ -377,6 +384,8 @@ public sealed class FlexTelemetryEventRow
             "ControlChange" => new TelemetryLogTypeKey(5, "Field / Input Edit"),
             "TaskLaunch" or "ReportRun" or "InquiryRun" => new TelemetryLogTypeKey(6, "Task & Report"),
             "SqlQuery" => new TelemetryLogTypeKey(7, "SQL Query"),
+            "Database" => new TelemetryLogTypeKey(7, "Database"),
+            "Application" => new TelemetryLogTypeKey(9, "Application Log"),
             "Session" => new TelemetryLogTypeKey(8, "Session / Auth"),
             _ => new TelemetryLogTypeKey(9, string.IsNullOrWhiteSpace(kind) ? "Application Event" : kind!)
         };
@@ -465,6 +474,14 @@ public sealed class FlexSqlTelemetryEntry
     public string Parameters { get; init; } = string.Empty;
     public long ElapsedMs { get; init; }
     public int? RowCount { get; init; }
+    /// <summary>Bytes the server sent back, where the provider counts them (reported when the connection closes).</summary>
+    public long? BytesReceived { get; init; }
+    /// <summary>Bytes sent to the server, where the provider counts them (reported when the connection closes).</summary>
+    public long? BytesSent { get; init; }
+    /// <summary>Rows a connection's statements read, as the provider counted them; set on a connection close only.</summary>
+    public long? ProviderRowsRead { get; init; }
+    /// <summary>Rows a connection's statements changed, as the provider counted them; set on a connection close only.</summary>
+    public long? ProviderRowsAffected { get; init; }
     public string? ErrorMessage { get; init; }
     public string Tenant { get; init; } = string.Empty;
     public string UserId { get; init; } = string.Empty;
@@ -512,8 +529,18 @@ public sealed class FlexSqlTelemetryEntry
     [JsonIgnore]
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
+    /// <summary>Rows this entry retrieved: a reading statement's row count, or the provider's count on a connection close.</summary>
     [JsonIgnore]
-    public string StatusLabel => HasError ? "Error" : (ElapsedMs >= 500 ? "Slow" : "OK");
+    public long RowsRead => ProviderRowsRead ?? (EventKind == FlexSqlEventKinds.Statement && !IsWrite && RowCount is int n && n > 0 ? n : 0);
+    /// <summary>Rows this entry inserted, updated or deleted: a writing statement's row count, or the provider's count on a connection close.</summary>
+    [JsonIgnore]
+    public long RowsAffected => ProviderRowsAffected ?? (EventKind == FlexSqlEventKinds.Statement && IsWrite && RowCount is int n && n > 0 ? n : 0);
+
+    [JsonIgnore]
+    public string StatusLabel => HasError ? "Error" : (IsSlow ? "Slow" : "OK");
+    /// <summary>At or over <see cref="FlexSqlRecorder.SlowStatementMs"/>.</summary>
+    [JsonIgnore]
+    public bool IsSlow => ElapsedMs >= FlexSqlRecorder.SlowStatementMs;
 
     [JsonIgnore]
     public string SqlPreview

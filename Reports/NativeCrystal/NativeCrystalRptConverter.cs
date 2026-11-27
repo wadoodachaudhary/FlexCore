@@ -441,16 +441,15 @@ public static partial class NativeCrystalRptConverter
                     && header.AsSpan(268).StartsWith(new byte[] { 0xd2, 7, 16, 0 }) && header.AsSpan(272).StartsWith("HBars\0"u8))
                 {
                     chart.ChartType = Charts.ChartType.HorizontalBar;
+                    // The flat-bar legend flag can be set by placement alone, with no right-key style.
+                    // Clear both before reading optional paint data; the horizontal chart draws its own categories.
+                    chart.ChartCategoryLegend = false;
+                    chart.RightCategoryLegend = null;
                     if (contents is not null)
                     {
                         var drawing = TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes);
                         chart.HorizontalBarText = new(chart.SavedBarValueTitle, ReadTitleColor(drawing) ?? "#000000",
                             ChartPrintPoints(drawing, 2015), ChartPrintPoints(drawing, 2022), ChartPrintPoints(drawing, 2018), ReadPlotFrame(drawing));
-                    }
-                    if (chart.RightCategoryLegend is not null)
-                    {
-                        chart.ChartCategoryLegend = false;
-                        chart.RightCategoryLegend = null;
                     }
                 }
             }

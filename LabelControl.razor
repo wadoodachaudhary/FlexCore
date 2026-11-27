@@ -1,0 +1,31 @@
+@namespace Fx.ControlKit
+@inherits FlexKitControlBase
+
+@* LabelControl — a field caption. Renders one <label> carrying fx-label, so a host styles its
+   captions through that class; For ties the caption to the input with that id. *@
+<label @attributes="AdditionalAttributes"
+       class="@ResolvedCssClass"
+       for="@For"
+       style="@Style"
+       title="@Title">@if (ChildContent is not null) { @ChildContent } else { @Text }</label>
+
+@code {
+    /// <summary>The caption text; ignored when <see cref="ChildContent"/> is given.</summary>
+    [Parameter] public string? Text { get; set; }
+
+    /// <summary>Caption content, for a caption that holds more than plain text.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>The id of the input this caption belongs to.</summary>
+    [Parameter] public string? For { get; set; }
+
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>Unmatched attributes go to the label element; the parameters above win.</summary>
+    [Parameter(CaptureUnmatchedValues = true)]
+    public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass) ? "fx-label" : "fx-label " + CssClass.Trim();
+}

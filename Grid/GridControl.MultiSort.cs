@@ -220,6 +220,7 @@ public partial class GridControl<TValue>
 
             _showSortDialog = false;
             LogGridAction("Sorted", string.Join(", ", sorts.Select(s => $"{s.Field} {s.Direction}")), "MultiSort");
+            RecordGridSortGraph(sorts, "MultiSortDialog");
             if (EventsRef?.Sorted.HasDelegate == true)
                 foreach (var sort in sorts)
                     await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = sort.Field, Direction = sort.Direction });

@@ -151,7 +151,11 @@ internal static partial class CrystalReportContentsParser
         foreach (var obj in definition.ReportDefinition.Areas.SelectMany(a => a.Sections).SelectMany(s => s.ReportObjects))
         {
             var resolved = ResolveFieldType(obj.DataSource, database, definition, out var type);
-            obj.Format.BooleanYesNo = obj.BooleanYesNo && resolved && type == 8;
+            // Crystal exposes a summary's input type too. A Count of Boolean values prints an integer,
+            // not Boolean ink. Do not change the legacy numeric/date schema for unrelated summaries.
+            obj.Format.BooleanYesNo = obj.BooleanYesNo && resolved && type == 8 && !definition.SummaryFields.Any(s =>
+                s.Operation is 6 or 9 && SummaryFormulaName(s, definition).Equals(obj.DataSource, StringComparison.OrdinalIgnoreCase))
+                && !definition.RunningTotalFields.Any(t => t.Operation is 6 or 9 && t.FormulaName.Equals(obj.DataSource, StringComparison.OrdinalIgnoreCase));
             obj.NativeNumberFormat = resolved && type is >= 0 and <= 7
                 ? type == 7 ? obj.NativeCurrencyFormat : obj.NativeNumberFormat : null;
             obj.NativeCurrencyFormat = null;

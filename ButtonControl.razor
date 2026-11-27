@@ -144,9 +144,39 @@ else
                     return v.ToString()!.Trim();
             }
         }
+        var caption = CaptionText();
+        if (caption is not null) return caption;
         if (!string.IsNullOrWhiteSpace(IconCss)) return IconCss!.Trim();
         if (!string.IsNullOrWhiteSpace(CssClass)) return CssClass!.Trim();
         return ButtonType == "submit" ? "Submit" : null;
+    }
+
+    // The button's own caption, read from the literal text of its content: a log names "Cancel", not a CSS class.
+    private string? CaptionText()
+    {
+        if (ChildContent is null) return null;
+        try
+        {
+            using var builder = new Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder();
+            ChildContent(builder);
+            var frames = builder.GetFrames();
+            var text = new System.Text.StringBuilder();
+            for (var i = 0; i < frames.Count; i++)
+            {
+                var frame = frames.Array[i];
+                if (frame.FrameType == Microsoft.AspNetCore.Components.RenderTree.RenderTreeFrameType.Text)
+                    text.Append(frame.TextContent).Append(' ');
+                else if (frame.FrameType == Microsoft.AspNetCore.Components.RenderTree.RenderTreeFrameType.Markup)
+                    text.Append(System.Text.RegularExpressions.Regex.Replace(frame.MarkupContent ?? string.Empty, "<[^>]*>", " ")).Append(' ');
+            }
+            var caption = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(text.ToString(), @"\s+", " ")).Trim();
+            if (caption.Length == 0) return null;
+            return caption.Length > 40 ? caption[..40] : caption;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task HandleButtonClickAsync(MouseEventArgs e)

@@ -95,7 +95,11 @@ public partial class GridControl<TValue>
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
         if (applied)
+        {
+            var matched = UsesItemsProvider ? SafeTotalRowCount() : GetFilteredRecords().Count();
+            RecordGridFindGraph("ExpressionFilter", expression, "Expression", "Filter", matched, matched > 0 ? 1 : 0, SafeTotalRowCount());
             await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
+        }
     }
 
     private async Task ClearExpressionFilterAsync()

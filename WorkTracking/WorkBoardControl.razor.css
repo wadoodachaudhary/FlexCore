@@ -1,0 +1,6 @@
+.fx-work-board { min-width: 0; }
+.fx-work-board-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
+.fx-work-board-toolbar span { border: 1px solid var(--fx-border-color, #ccd1d8); border-radius: 5px; padding: .3rem .6rem; }
+.fx-work-board-outline { max-height: 65vh; overflow: auto; }
+.fx-work-board-row { display: flex; align-items: center; gap: .6rem; border-bottom: 1px solid var(--fx-border-color, #d6dae0); padding-top: .35rem; padding-bottom: .35rem; }
+.fx-work-board-kind { min-width: 4rem; font-size: .8rem; opacity: .75; }

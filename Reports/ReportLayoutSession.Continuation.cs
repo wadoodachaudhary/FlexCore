@@ -88,6 +88,19 @@ public sealed partial class ReportLayoutSession
         return string.Concat(tree.Nodes().Select(n => n.ToString(SaveOptions.DisableFormatting)));
     }
 
+    private static void RemovePrintedPrefix(XElement parent, int remaining)
+    {
+        // Empty paragraphs in the unprinted suffix have height even though they have no characters.
+        foreach (var node in parent.Nodes().ToArray())
+        {
+            if (remaining <= 0) break;
+            var length = node is XElement e ? e.Value.Length : (node as XText)?.Value.Length ?? 0;
+            if (length <= remaining) { remaining -= length; node.Remove(); }
+            else if (node is XText text) { text.Value = text.Value[remaining..]; break; }
+            else if (node is XElement child) { RemovePrintedPrefix(child, remaining); break; }
+        }
+    }
+
     private Band ContinueText(Band previous, Band fresh, int offset, Func<Item, int> height)
     {
         var changing = previous.Items.Where(i => i.Element.CanGrow && i.Element.TopTwips < offset && i.Element.TopTwips + height(i) > offset)
@@ -158,15 +171,10 @@ public sealed partial class ReportLayoutSession
                     _diagnostics.Add($"{item.Element.Name}: a page-dependent value changed an already printed prefix; the previous value is retained for this continuation.");
                     tree = TextTree(item.Html); remaining = consumed;
                 }
-                foreach (var node in tree.DescendantNodes().OfType<XText>().ToArray())
-                {
-                    var take = Math.Min(remaining, node.Value.Length); node.Value = node.Value[take..]; remaining -= take;
-                }
-                // Empty rich runs otherwise retain their old line box/font height.
-                foreach (var span in tree.Descendants().Where(e => e.Value.Length == 0).ToArray()) span.Remove();
+                RemovePrintedPrefix(tree, remaining);
                 var html = string.Concat(tree.Nodes().Select(n => n.ToString(SaveOptions.DisableFormatting)));
                 element.TopTwips = offset; element.HeightTwips = Math.Max(0, item.Element.HeightTwips - (offset - item.Element.TopTwips));
-                next = next with { Html = html, TemplateHtml = html, Measurement = -2, ConsumedText = prefix };
+                next = next with { Html = html, TemplateHtml = html, Measurement = -2, ConsumedText = prefix, ParagraphValues = null };
             }
             items.Add(next);
             shifts.Add((oldBottom, element.TopTwips + height(next) - oldBottom, item));

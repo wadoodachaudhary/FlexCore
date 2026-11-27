@@ -296,9 +296,22 @@
             {
                 <ControlActivityControl @ref="_controlActivity"
                                         Theme="@ActiveTheme"
-                                        Snapshot="@_snapshot" />
+                                        Snapshot="@_snapshot"
+                                        Events="@_rawEvents"
+                                        UserId="@_selectedUser"
+                                        Tenant="@EffectiveTenant" />
             }
-            else if (_selectedTab == 3 && _snapshot is not null)
+            else if (_selectedTab == 3)
+            {
+                <CustomAnalyticsControl @ref="_customAnalytics"
+                                        Theme="@ActiveTheme"
+                                        CustomSnapshot="@_customSnapshot"
+                                        Tenant="@EffectiveTenant"
+                                        SearchText="@_searchText"
+                                        ShowChrome="false"
+                                        OnCapturesMutated="RefreshAsync" />
+            }
+            else if (_selectedTab == 4 && _snapshot is not null)
             {
                 <div class="fx-tel-grid-pane">
                     <div class="fx-tel-subbar">
@@ -393,7 +406,7 @@
                     </div>
                 </div>
             }
-            else if (_selectedTab == 4 && _snapshot is not null)
+            else if (_selectedTab == 5 && _snapshot is not null)
             {
                 <div class="fx-tel-scroll-pane">
                     <div class="fx-tel-kpi-grid">
@@ -643,7 +656,7 @@
     public sealed record TimePreset(string Key, string Label, int DaysBack, int? MinutesBack);
     public sealed record ThemeOption(TelemetryTheme Value, string Text);
 
-    public const int BuiltInTabCount = 5;
+    public const int BuiltInTabCount = 6;
     public const int ProductAnalyticsTabCount = 6;
 
     private static readonly List<ThemeOption> ThemeOptions = new()
@@ -768,6 +781,8 @@
     [Parameter] public Func<int, (string Suffix, string CsvContent)?>? OnCustomTabExportCsv { get; set; }
 
     private ControlActivityControl? _controlActivity;
+    private IReadOnlyList<FlexTelemetryEvent>? _rawEvents;
+    private CustomAnalyticsControl? _customAnalytics;
     private LogControl? _logControl;
     private SqlTelemetryControl? _sqlControl;
     private FeatureAdoptionControl? _featureAdoption;
@@ -808,6 +823,7 @@
     private string _usageStatusFilter = "All";
 
     private FlexTelemetrySnapshot? _snapshot;
+    private FlexCustomAnalyticsSnapshot? _customSnapshot;
     private FlexProductAnalyticsSnapshot? _productSnapshot;
     private readonly List<ChartSeries> _timeSeriesHistogramSeries = new();
     private readonly List<ChartSeries> _controlTypeDonutSeries = new();
@@ -883,6 +899,7 @@
                 new TabStripItem { Text = logLabel },
                 new TabStripItem { Text = "SQL Queries" },
                 new TabStripItem { Text = "Control Telemetry & Grids" },
+                new TabStripItem { Text = "Custom Captures & Graphs" },
                 new TabStripItem { Text = "Screens, Tasks & Zero-Use" },
                 new TabStripItem { Text = overviewLabel }
             };
@@ -1030,8 +1047,19 @@
             _userOptions.Add(new FilterOption(usr, usr));
 
         RebuildCharts();
+        BuildCustomAnalyticsSnapshotInternal(ds, queryFilter);
         if (EnableProductAnalytics)
             BuildProductSnapshotInternal(ds, queryFilter);
+    }
+
+    private void BuildCustomAnalyticsSnapshotInternal(ITelemetryDataSource ds, FlexTelemetryQueryFilter queryFilter)
+    {
+        var span = _selectedMinutesBack.HasValue
+            ? TimeSpan.FromMinutes(_selectedMinutesBack.Value)
+            : TimeSpan.FromDays(Math.Max(1, _selectedDays));
+        var rawEvents = ds.QueryEvents(DateTime.UtcNow - span, EffectiveTenant, _defaultTenant, maxCount: 50_000);
+        _rawEvents = rawEvents;
+        _customSnapshot = FlexCustomAnalyticsEngine.BuildSnapshot(rawEvents, queryFilter, _defaultTenant);
     }
 
     private void RefreshProductSnapshotIfNeeded()
@@ -1346,6 +1374,10 @@
         {
             (suffix, csvBody) = _controlActivity.BuildCurrentCsv();
         }
+        else if (_selectedTab == 3 && _customAnalytics is not null)
+        {
+            (suffix, csvBody) = _customAnalytics.BuildCurrentCsv();
+        }
         else
         {
             (suffix, csvBody) = BuildScreensOrTasksCsv();
@@ -1360,7 +1392,7 @@
     private (string Suffix, string CsvContent) BuildScreensOrTasksCsv()
     {
         var sb = new StringBuilder();
-        if (_selectedTab == 3 && _screenSubMode == "TasksReports")
+        if (_selectedTab == 4 && _screenSubMode == "TasksReports")
         {
             sb.AppendLine("Type,Name,Module,Status,Executions,Users,LastExecuted");
             foreach (var r in FilteredTaskRows)

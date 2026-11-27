@@ -25,7 +25,9 @@ public static class CrystalReportXmlVersion
     // Version 59 carries paragraph margins, first-line indents, alignment and native box corner ellipses.
     // Version 60 retains date objects from legacy records without the optional weekday trailer.
     // Version 61 carries boolean field styles, time-field clocks and horizontal chart typography.
-    public const int Current = 61;
+    // Version 62 corrects Boolean count masks and recovers usable horizontal charts with damaged drawing styles.
+    // Version 63 also clears flat-bar-only legend flags saved without a key style for a horizontal chart.
+    public const int Current = 63;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;

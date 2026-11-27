@@ -675,6 +675,7 @@
         <ContextMenuSectionControl Text="Columns" />
         <ContextMenuItemControl Text="Best Fit All Columns" OnClick="HeaderMenuBestFitAllAsync" />
         <ContextMenuItemControl Text="Best Fit to Grid" OnClick="HeaderMenuBestFitToGridAsync" />
+        <ContextMenuItemControl Text="Page Width" Icon="@(IsPageWidth ? "\u2713" : " ")" OnClick="HeaderMenuTogglePageWidthAsync" />
     }
     @if (AllowRowDragAndDrop && _selectedItem is not null)
     {

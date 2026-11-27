@@ -140,7 +140,7 @@ public sealed partial class ReportLayoutSession
     public List<ReportTextMeasurement> Measurements { get; } = [];
     /// <summary>Measurements already answered by <see cref="CrystalDeviceText"/>; never sent to the browser.</summary>
     private readonly Dictionary<string, ReportTextMetrics> _nativeMetrics = new(StringComparer.Ordinal);
-    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null, ReportTableFragment? Table = null, DuplicateFieldValue? DuplicateValue = null, decimal? AccumulatorDelta = null, Action<IDictionary<string, object?>>? PrintGrid = null, int HorizontalPane = 0, bool NarrowedByFrame = false);
+    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null, ReportTableFragment? Table = null, DuplicateFieldValue? DuplicateValue = null, decimal? AccumulatorDelta = null, Action<IDictionary<string, object?>>? PrintGrid = null, int HorizontalPane = 0, bool NarrowedByFrame = false, string[]? ParagraphValues = null);
     private sealed record InlineHeader(int Start, int End, Band Header, int KeepThrough = 0, bool Repeat = true, object? HorizontalPeers = null);
     private sealed record InlineSection(int Start, int End, Band Source, ReportDesignerSection? Format = null, bool Blank = false, bool FirstVisible = false);
     private sealed record InlineCut(Band Source, int RetainedHeight);
@@ -501,6 +501,11 @@ public sealed partial class ReportLayoutSession
         object Unsupported() { _diagnostics.Add($"Summary operation '{summary.Operation}' is not implemented."); return "[Unsupported summary]"; }
     }
 
+    // Older converted layouts may retain the input Boolean's Yes/No mask on a numeric result.
+    // This is a presentation mask, never an Excel number format for a count.
+    private static string EffectiveValueFormat(string format, object? value) =>
+        format == "Yes/No" && value is (sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal) ? "" : format;
+
     private string Format(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime = null,
         ReportNativeNumberFormat? nativeNumber = null, ReportNativeNumericFormat? nativeNumeric = null, Action<object?>? capture = null)
     {
@@ -521,7 +526,8 @@ public sealed partial class ReportLayoutSession
             }
             else value = Value(reference, row);
             capture?.Invoke(value);
-            if (value is bool boolean && format == "Yes/No") return boolean ? "Yes" : "No";
+            format = EffectiveValueFormat(format, value);
+            if (format == "Yes/No" && value is bool boolean) return boolean ? "Yes" : "No";
             if (string.IsNullOrEmpty(format) && value is TimeSpan clock && nativeDateTime is { } clockFormat
                 && clock >= TimeSpan.Zero && clock < TimeSpan.FromDays(1) && (clockFormat with { Order = 3 }) is { UnsupportedReason: null } timeOnly)
                 return timeOnly.Format(DateTime.MinValue.Add(clock), CultureInfo.CurrentCulture);
@@ -1168,7 +1174,7 @@ public sealed partial class ReportLayoutSession
             if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
                 && element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport" or "Table"))
                 _diagnostics.Add($"{element.Name}: {element.Kind} objects are not implemented in positioned rendering.");
-            var (html, duplicateValue) = CaptureFieldContent(element, row);
+            var (html, duplicateValue) = CaptureFieldContent(element, row, out var paragraphValues);
             // Crystal prints an on-demand subreport as its caption (the subreport's name unless the Format Editor's caption formula
             // says otherwise) in the object's font; the reader opens the subreport from it, for the record this band printed.
             if (onDemand) html = OnDemandCaptionHtml(element, row);
@@ -1177,7 +1183,7 @@ public sealed partial class ReportLayoutSession
             if (element.CanGrow && !element.HasRotatedText && element.Kind is "Text" or "Field" or "FieldHeading")
             {
                 var style = ReportObjectRenderer.Style(element, false);
-                var measuredHtml = ResolvePageValues(html.Replace(_pageToken, "88888", StringComparison.Ordinal).Replace(_countToken, "88888", StringComparison.Ordinal), 88888, 88888);
+                var measuredHtml = paragraphValues != null ? PagedParagraph(element, paragraphValues, 88888, 88888, false) : ResolvePageValues(html.Replace(_pageToken, "88888", StringComparison.Ordinal).Replace(_countToken, "88888", StringComparison.Ordinal), 88888, 88888);
                 var measurement = new ReportTextMeasurement(style, measuredHtml, ReportObjectRenderer.TextLineLimit(element));
                 var key = MeasurementKey(measurement);
                 if (!_measurementKeys.TryGetValue(key, out measure))
@@ -1278,7 +1284,7 @@ public sealed partial class ReportLayoutSession
                 catch (Exception error) when (error is InvalidDataException or NotSupportedException or FormatException)
                 { _diagnostics.Add(element.Name + ": " + error.Message); html = ReportObjectRenderer.Encode("[" + element.Name + ": " + error.Message + "]"); }
             }
-            items.Add(new(element, html, measure, child, childOffset, this, row, Analysis: analysis, DuplicateValue: duplicateValue));
+            items.Add(new(element, html, measure, child, childOffset, this, row, Analysis: analysis, DuplicateValue: duplicateValue, ParagraphValues: paragraphValues));
         }
         var band = new Band(section, items, row, repeats.ToList(), Suppressed: sectionHidden, Owner: this);
         CaptureOnDemandVariables(band);
@@ -1844,10 +1850,7 @@ public sealed partial class ReportLayoutSession
         {
             var current = pages[index];
             var lastRow = current.Placements.LastOrDefault(placement => placement.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1;
-            if (current.EndsWithReportHeaderBreak || (!current.HasHeaders && index < pages.Count - 1
-                && current.Placements.Any(p => !p.Band.Suppressed && p.Band.Section.Kind == "ReportHeader")
-                && current.Placements.Where(p => !p.Band.Suppressed).All(p => p.Band.Section.Kind == "ReportHeader"
-                    && (p.Offset == 0 && p.Height >= Height(p.Band) || p.Band.Items.Any(i => i.Table?.NativeCrossTab != null))))) continue;
+            if (OmitsFooter(current, index < pages.Count - 1)) continue;
             var footerTop = current.Bottom;
             for (var f = 0; f < footers.Count; f++)
             {
@@ -2169,7 +2172,12 @@ public sealed partial class ReportLayoutSession
                         if (item.HorizontalPane == 0 && right > size.ContentWidthTwips && SuppressesDuplicates(item.Element))
                             duplicateDecisions[(placement, item)] = suppressedDuplicate;
                     }
-                    content = suppressedDuplicate ? "" : duplicates.PageCurrency(item, this, snapshots.Count + 1, content);
+                    if (suppressedDuplicate) content = "";
+                    else
+                    {
+                        content = duplicates.PageCurrency(item, this, snapshots.Count + 1, content, out var effective);
+                        element.NativeNumericFormat = effective;
+                    }
                     var numericContent = content;
                     content = MaskNumericOverflow(item with { Element = element, Html = content });
                     numericContent = numericContent != content ? numericContent : null;
@@ -2246,7 +2254,7 @@ public sealed partial class ReportLayoutSession
                     html.Append("<div data-object=\"").Append(ReportObjectRenderer.Encode(element.Name)).Append("\" style=\"")
                         .Append(ReportObjectRenderer.Style(element, true, size.MarginLeftTwips + placement.Left, size.MarginTopTwips + placement.Top))
                         .Append(overprint ? "visibility:hidden;\" data-fx-native-overprint=\"true\" aria-hidden=\"true\">" : "\">")
-                        .Append(content).Append("</div>");
+                        .Append(ReportObjectRenderer.PreviewContent(element, content)).Append("</div>");
                 }
                 pageBands.Add(new(placement.Band.Section.Name, placement.Top, placement.Height, placement.Band.Section.BackgroundColor, objects)
                     { LeftTwips = placement.Left, WidthTwips = placement.Width, NavigationAnchors = anchors,
@@ -2300,12 +2308,14 @@ public sealed partial class ReportLayoutSession
                         var visibleHeight = source.Kind == "Line" && height == 0 ? 1 : height;
                         if (top >= placement.Height || top + visibleHeight <= 0) continue;
                         var content = nullNativeField ? "" : ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader);
+                        var effective = source.NativeNumericFormat;
                         content = duplicates.Suppress(item, placement.Band.Owner ?? this, index + 1, placement.Band.RepeatedHeader) ? ""
-                            : duplicates.PageCurrency(item, this, index + 1, content);
+                            : duplicates.PageCurrency(item, this, index + 1, content, out effective);
                         if (content.Length > 0 && NeedsNumericMask(source))
                         {
                             // The probe's key carries the painted box, so the box is built as the paint builds it.
                             var element = source.CloneFor(source.SectionId, source.Name);
+                            element.NativeNumericFormat = effective;
                             element.LeftTwips = source.LeftTwips; element.TopTwips = top; element.HeightTwips = height;
                             content = MaskNumericOverflow(item with { Element = element, Html = content });
                         }
@@ -2553,7 +2563,7 @@ public sealed partial class ReportLayoutSession
         {
             if (!Subreports(band)) return band;
             var physical = fresh ? pages.Count + 1 : pages.Count;
-            var number = !fresh ? page.Number : (resetPageNumber || page.FooterResetsNumber) ? 1 : page.Number + 1;
+            var number = !fresh ? page.Number : (resetPageNumber || PrintedFooterResets(page)) ? 1 : page.Number + 1;
             var count = ExpectedCount(physical - 1);
             return Furnished(PrepareFurnitureSubreports(ForPage(band, number, count, physicalPage: physical), number, count, physical, build: false), number, count, physical);
         }
@@ -2567,6 +2577,11 @@ public sealed partial class ReportLayoutSession
             lastPageBand = (index, page.Number, count, band);
             return band;
         }
+        bool OmitsFooter(Page current, bool hasSuccessor) => current.EndsWithReportHeaderBreak || (!current.HasHeaders && hasSuccessor
+                && current.Placements.Any(p => !p.Band.Suppressed && p.Band.Section.Kind == "ReportHeader")
+                && current.Placements.Where(p => !p.Band.Suppressed).All(p => p.Band.Section.Kind == "ReportHeader"
+                    && (p.Offset == 0 && p.Height >= Height(p.Band) || p.Band.Items.Any(i => i.Table?.NativeCrossTab != null))));
+        bool PrintedFooterResets(Page previous) => previous.FooterResetsNumber && !OmitsFooter(previous, true);
         bool ResetsAfterFooter(Band band) => !band.Blank && !band.Suppressed
             && (band.Section.ResetPageNumberAfter || _layout.Areas.GetValueOrDefault(band.Section.Id)?.ResetPageNumberAfter == true);
         Page NewPage(int row, List<Band> repeats, bool withHeaders = true)
@@ -2574,7 +2589,7 @@ public sealed partial class ReportLayoutSession
             _pageStartBands.Add(Math.Max(0, sequence));
             if (_paginationPageLimit > 0 && pages.Count >= _paginationPageLimit) throw new PagePrefixComplete();
             if (pages.Count >= 10000) throw new InvalidDataException("Report exceeds the 10,000-page layout limit.");
-            var number = pages.Count == 0 || resetPageNumber || pages[^1].FooterResetsNumber ? 1 : pages[^1].Number + 1;
+            var number = pages.Count == 0 || resetPageNumber || PrintedFooterResets(pages[^1]) ? 1 : pages[^1].Number + 1;
             var footerRow = footerRows is not null && pages.Count < footerRows.Count ? footerRows[pages.Count] : row;
             var reserve = 0;
             var footerResets = false;
@@ -2762,7 +2777,8 @@ public sealed partial class ReportLayoutSession
                     var width = Math.Max(ReportTabularData.MinimumPaneWidthTwips, available);
                     if (width > available)
                         _diagnostics.Add($"{item.Element.Name}: table is narrower than the 0.25-inch minimum pane; content past its edge is clipped.");
-                    var panes = table.PaginateColumns(width, item.Element.FontSize, item.Analysis.Definition.RowHeightTwips);
+                    var keepColumns = string.Equals(item.Element.Kind, "CrossTab", StringComparison.OrdinalIgnoreCase) && item.Analysis.Definition.KeepColumnsTogether;
+                    var panes = table.PaginateColumns(width, item.Element.FontSize, item.Analysis.Definition.RowHeightTwips, keepColumns);
                     var regionCursor = top;
                     var horizontal = table.NativeCrossTab is not null && table.RepeatedColumns == 0;
                     object? headerPeers = horizontal && panes.Count > 1 ? item : null;

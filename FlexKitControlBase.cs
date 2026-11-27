@@ -236,6 +236,113 @@ public abstract class FlexKitControlBase : ComponentBase
         }
     }
 
+    /// <summary>
+    /// Emits a structured custom analytics &amp; directed interaction graph event from this control,
+    /// automatically inheriting its hierarchical <c>Location</c>, <c>Screen</c>, <c>Tag</c>, and host session context
+    /// on the server with zero extra client-server round trips. Returns the generated <c>OperationId</c> for causal chaining.
+    /// </summary>
+    public string RecordCustomAnalytics(
+        string eventName,
+        string category,
+        Action<FlexCustomEventBuilder> configure,
+        string? controlIdOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(eventName))
+            return string.Empty;
+
+        var builder = new FlexCustomEventBuilder(eventName, category);
+        configure?.Invoke(builder);
+        var graph = builder.Build();
+
+        var (sink, ctxProvider) = ResolveLoggingServices();
+        var hostCtx = ctxProvider?.GetCurrentContext() ?? default;
+        var (screen, route, fullLocation, controlId) = ResolveControlLocation(controlIdOverride);
+
+        var record = new FlexControlLogRecord
+        {
+            TimestampUtc = DateTime.UtcNow,
+            EventType = "FlexCustomAnalytics",
+            Application = !string.IsNullOrWhiteSpace(hostCtx.Application) ? hostCtx.Application : "FlexKitApp",
+            Tenant = hostCtx.Tenant ?? string.Empty,
+            DivisionId = hostCtx.DivisionId,
+            UserId = !string.IsNullOrWhiteSpace(hostCtx.UserId) ? hostCtx.UserId : "anonymous",
+            SessionId = hostCtx.SessionId ?? string.Empty,
+            ClientIp = hostCtx.ClientIp,
+            Screen = screen,
+            Route = route,
+            Location = fullLocation,
+            ControlType = ControlTypeName,
+            ControlId = controlId,
+            Tag = string.IsNullOrWhiteSpace(_tag) ? null : _tag!.Trim(),
+            Action = graph.EventName,
+            Value = SanitizeValue(builder.Value ?? graph.SubKind),
+            Detail = FlexCustomAnalyticsCodec.PackDetail(SanitizeValue(builder.Detail ?? graph.Summary), graph),
+            DurationMs = builder.DurationMs,
+            CustomAnalytics = graph
+        };
+
+        var forSink = sink is not null && sink.IsEnabled;
+        var queued = _log.Append(record, forSink);
+        if (!forSink || sink is null)
+            return graph.OperationId;
+
+        if (queued >= FlexControlLog.MaxPendingRecords)
+        {
+            _log.FlushTo(sink);
+            return graph.OperationId;
+        }
+
+        var syncCtx = SynchronizationContext.Current;
+        if (syncCtx is null)
+        {
+            _log.FlushTo(sink);
+        }
+        else if (!_flushQueued)
+        {
+            _flushQueued = true;
+            syncCtx.Post(static state =>
+            {
+                var (ctrl, targetSink) = ((FlexKitControlBase, IFlexControlLogSink))state!;
+                ctrl._flushQueued = false;
+                ctrl._log.FlushTo(targetSink);
+            }, (this, sink));
+        }
+
+        return graph.OperationId;
+    }
+
+    /// <summary>Starts a timed custom analytics graph scope bound to this control.</summary>
+    public FlexInteractionScope BeginCustomAnalyticsScope(
+        string eventName,
+        string category = "Custom",
+        string? parentOperationId = null) =>
+        new(
+            eventName,
+            category,
+            parentOperationId,
+            b => RecordCustomAnalytics(
+                eventName,
+                category,
+                inner =>
+                {
+                    var built = b.Build();
+                    inner.WithSubKind(built.SubKind)
+                         .WithOutcome(built.Outcome)
+                         .WithSummary(built.Summary)
+                         .WithParentOperation(built.ParentOperationId)
+                         .WithValue(b.Value)
+                         .WithDetail(b.Detail)
+                         .WithDurationMs(b.DurationMs);
+                    if (built.Metrics is not null)
+                        foreach (var kv in built.Metrics) inner.WithMetric(kv.Key, kv.Value);
+                    if (built.Tags is not null)
+                        foreach (var kv in built.Tags) inner.WithTag(kv.Key, kv.Value);
+                    if (built.Nodes is not null)
+                        foreach (var n in built.Nodes) inner.AddNode(n.Id, n.Kind, n.Label, n.Value);
+                    if (built.Edges is not null)
+                        foreach (var e in built.Edges) inner.AddEdge(e.SourceId, e.TargetId, e.Relation, e.Weight);
+                }));
+
     /// <summary>Explicitly flushes any pending entries in <see cref="Log"/> to the configured sink.</summary>
     public int FlushControlLog()
     {

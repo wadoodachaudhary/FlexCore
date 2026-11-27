@@ -1,0 +1,126 @@
+@namespace Fx.ControlKit.Grid
+@inherits FlexControlBase
+@using Fx.ControlKit
+
+@if (Visible)
+{
+    <CascadingValue Value="@ChildLocation" IsFixed="true">
+        <div class="@RootCssClass" style="@RootStyle" id="@Id" data-fx-sqltable-view="@(_result == null ? null : _view.ToString().ToLowerInvariant())">
+            @if (ShowToolbar && _result != null && _result.Columns.Count > 0)
+            {
+                <div class="fx-sqltable-toolbar">
+                    @if (CrosstabAvailable)
+                    {
+                        <SegmentedControl Items="@ViewItems"
+                                          Value="@_view.ToString()"
+                                          ValueChanged="OnViewPickedAsync"
+                                          AriaLabel="Result view"
+                                          Tag="fx-sqltable-view" />
+                    }
+                    @if (ShowSearch)
+                    {
+                        <span class="fx-sqltable-search">
+                            <SearchBoxControl @key="_resultVersion"
+                                              Value="@_search"
+                                              OnSearch="OnSearchAsync"
+                                              Placeholder="Search"
+                                              DebounceDelayMs="300"
+                                              Tag="fx-sqltable-search" />
+                        </span>
+                    }
+                    <span class="fx-sqltable-count" role="status">@CountText</span>
+                </div>
+            }
+
+            <div class="fx-sqltable-body">
+                @if (_loading)
+                {
+                    <div class="fx-sqltable-status" role="status">
+                        <LoaderControl Text="Running query" />
+                    </div>
+                }
+                else if (_error != null)
+                {
+                    @if (!OnError.HasDelegate)
+                    {
+                        <div class="fx-sqltable-error" role="alert">@_error.Message</div>
+                    }
+                }
+                else if (_result != null && _result.Columns.Count > 0)
+                {
+                    @* A view stays alive once opened, so switching keeps the table's sort and the crosstab's layout. *@
+                    @if (_tableOpened)
+                    {
+                        <div class="fx-sqltable-pane" hidden="@(_view != SqlTableView.Table)">
+                        <GridControl @key="_resultVersion"
+                                     @ref="_grid"
+                                     TValue="SqlTableRow"
+                                     @attributes="GridAttributes"
+                                     Tag="fx-sqltable-grid"
+                                     DataSource="@_viewRows"
+                                     AllowGrouping="@_hasGrouping"
+                                     GroupColumns="@_groupColumns"
+                                     GroupHeaderTextSelector="@(_runColumn == null ? null : RunHeaderText)"
+                                     ShowGroupExpandCollapse="true"
+                                     DefaultGroupsCollapsed="@(_hasGrouping && !_groupingExpanded)"
+                                     AggregateRows="@_aggregateRows"
+                                     Height="100%">
+                            <GridColumnsBase @key="ShowRunValueColumn">
+                                @foreach (var column in _result.Columns)
+                                {
+                                    if (column == _runColumn && !ShowRunValueColumn) continue;
+                                    <GridColumn Field="@column.Field"
+                                                HeaderText="@column.Name"
+                                                Width="@ColumnWidth"
+                                                AllowEditing="false"
+                                                AllowHiding="false"
+                                                AllowRenaming="false"
+                                                TextAlign="@column.TextAlign"
+                                                Format="@column.Format"
+                                                Type="@column.ColumnType" />
+                                }
+                                @if (_runColumn != null)
+                                {
+                                    @* The outline groups on each row's run; this unseen column gives that grouping its caption. *@
+                                    <GridColumn Field="@RunField"
+                                                HeaderText="@_runColumn.Name"
+                                                Width="@ColumnWidth"
+                                                Visible="false"
+                                                AllowEditing="false"
+                                                AllowHiding="false"
+                                                AllowRenaming="false"
+                                                AllowFiltering="false"
+                                                AllowSorting="false" />
+                                }
+                            </GridColumnsBase>
+                        </GridControl>
+                        </div>
+                    }
+                    @if (_crosstabOpened && CrosstabAvailable)
+                    {
+                        <div class="fx-sqltable-pane" hidden="@(_view != SqlTableView.Crosstab)">
+                        <PivotControl @key="_resultVersion"
+                                      @ref="_pivot"
+                                      TValue="SqlTableRow"
+                                      Tag="fx-sqltable-pivot"
+                                      CssClass="fx-sqltable-pivot"
+                                      DataSource="@_viewRows"
+                                      Interactive="true"
+                                      Fields="@_pivotFields"
+                                      FieldLabels="@_pivotLabels"
+                                      ValueFieldDefaults="@_pivotDefaults"
+                                      RowFields="@_pivotRows"
+                                      ColumnFields="@_pivotColumns"
+                                      ValueFields="@_pivotValues"
+                                      AllowSorting="@AllowSorting"
+                                      ShowGrandTotals="true"
+                                      HideRowTotalsWithoutColumns="true"
+                                      ShowSubTotals="true"
+                                      Height="100%" />
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </CascadingValue>
+}

@@ -67,7 +67,7 @@ internal static class CrystalDeviceText
 
     // One block per authored paragraph in both screen and print. Break at the printer's design em,
     // not the sometimes smaller PDF paint em. Only the first line gets the signed first-line offset.
-    internal static string Paragraph(ReportDesignerElement element, string html, ReportParagraphFormat format, int leadingTabs, double? pitch)
+    internal static string Paragraph(ReportDesignerElement element, string html, ReportParagraphFormat format, int leadingTabs, double? pitch, string paragraphFont)
     {
         var left = Math.Max(0, format.Left);
         var right = Math.Max(0, format.Right);
@@ -79,7 +79,7 @@ internal static class CrystalDeviceText
             - 15 * (ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips)
                   + ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips));
         long Pixels(double twips) => (long)Math.Round(Math.Max(0, twips) * dpi / 1440, MidpointRounding.AwayFromZero);
-        if (element.UseCrystalScreenMetrics && Enabled && format.CssAlignment(element.HorizontalAlignment) != "justify")
+        if (element.UseCrystalScreenMetrics && Enabled && ReportObjectRenderer.WrapText(element) && format.CssAlignment(element.HorizontalAlignment) != "justify")
         {
             try
             {
@@ -90,7 +90,7 @@ internal static class CrystalDeviceText
         }
         var lineHeight = pitch is { } px ? $"line-height:{ReportObjectRenderer.Number(px)}px;" : "";
         string Pt(int twips) => ReportObjectRenderer.Number(twips / 20d) + "pt";
-        return $"<div data-fx-paragraph=\"true\" style=\"padding-left:{Pt(left)};padding-right:{Pt(right)};text-indent:{Pt(first)};text-align:{format.CssAlignment(element.HorizontalAlignment)};tab-size:18pt;{lineHeight}min-height:1lh\">{html}</div>";
+        return $"<div data-fx-paragraph=\"true\" style=\"padding-left:{Pt(left)};padding-right:{Pt(right)};text-indent:{Pt(first)};text-align:{format.CssAlignment(element.HorizontalAlignment)};tab-size:18pt;{paragraphFont}{lineHeight}min-height:1lh\">{html}</div>";
     }
 
     /// <summary>The measured HTML, re-emitted as one block per native line so neither the viewer nor the PDF re-wraps it.</summary>

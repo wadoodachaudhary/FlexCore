@@ -84,6 +84,10 @@ public sealed record FlexControlLogRecord
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? DurationMs { get; init; }
 
+    [JsonPropertyName("customAnalytics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FlexTelemetryGraphPayload? CustomAnalytics { get; init; }
+
     private static readonly JsonSerializerOptions CloudWatchJsonOptions = new()
     {
         WriteIndented = false,
@@ -124,6 +128,7 @@ public sealed record FlexControlLogRecord
         if (!string.IsNullOrEmpty(Detail)) payload["Detail"] = Detail;
         if (!string.IsNullOrEmpty(ClientIp)) payload["ClientIp"] = ClientIp;
         if (DurationMs.HasValue) payload["DurationMs"] = DurationMs.Value;
+        if (CustomAnalytics is not null) payload["CustomAnalytics"] = CustomAnalytics;
         return JsonSerializer.Serialize(payload, CloudWatchJsonOptions);
     }
 
@@ -238,8 +243,25 @@ public sealed class FlexControlLocation
 /// Constantly updated in memory as actions occur on the control and flushed asynchronously in batches
 /// to the underlying IFlexControlLogSink without adding any client-server round trips.
 /// </summary>
-public sealed class FlexControlLog
+public sealed class FlexControlLog : FlexLog
 {
+    public override string Channel => FlexLogChannels.Control;
+}
+
+/// <summary>
+/// The parent of every FlexKit logger. A control, a database component and the host's own logging each hold
+/// a log derived from this one, and all of them hand their records to the same <see cref="IFlexControlLogSink"/>,
+/// so one store, one set of files and one viewer hold everything. A derived log only says what it logs
+/// (<see cref="Channel"/>) and adds the calls its owner needs.
+/// </summary>
+public abstract class FlexLog
+{
+    /// <summary>The sink a log without a control around it writes to. The first log store created sets itself here.</summary>
+    public static IFlexControlLogSink? DefaultSink { get; set; }
+
+    /// <summary>Control, Database or Application (<see cref="FlexLogChannels"/>).</summary>
+    public abstract string Channel { get; }
+
     private const int MaxControlHistory = 32;
     // Records waiting for the end of the server turn. A control hands them to its sink at once when this
     // many build up in one turn, so the queue stays bounded without losing any.
@@ -307,7 +329,36 @@ public sealed class FlexControlLog
         return batch.Length;
     }
 
+    /// <summary>
+    /// Writes one record now, for a log that has no control turn to wait for. A logger never fails its caller.
+    /// </summary>
+    protected void Write(FlexControlLogRecord record, IFlexControlLogSink? sink = null)
+    {
+        try
+        {
+            sink ??= DefaultSink;
+            var forSink = sink is { IsEnabled: true };
+            Append(record, forSink);
+            if (forSink)
+                FlushTo(sink);
+        }
+        catch
+        {
+        }
+    }
+
     public override string ToString() => CurrentStandardRow;
+}
+
+/// <summary>What a log record is about. Carried in <see cref="FlexControlLogRecord.EventType"/>.</summary>
+public static class FlexLogChannels
+{
+    public const string Control = "Control";
+    public const string Database = "Database";
+    public const string Application = "Application";
+
+    public const string DatabaseEventType = "FlexDatabase";
+    public const string ApplicationEventType = "FlexApplication";
 }
 
 /// <summary>
@@ -387,6 +438,7 @@ public sealed class FlexControlLogStore : IFlexControlLogSink, IAsyncDisposable,
 
     public FlexControlLogStore(FlexControlLoggingOptions? options = null, ILogger<FlexControlLogStore>? logger = null)
     {
+        FlexLog.DefaultSink ??= this;
         _options = options ?? new FlexControlLoggingOptions();
         _logger = logger;
 
@@ -673,6 +725,7 @@ public static class FlexControlLoggingServiceCollectionExtensions
         services.TryAddSingleton(opts);
         services.TryAddSingleton<FlexControlLogStore>();
         services.TryAddSingleton<IFlexControlLogSink>(sp => sp.GetRequiredService<FlexControlLogStore>());
+        services.TryAddScoped<IFlexCustomAnalytics, FlexCustomAnalyticsService>();
         return services;
     }
 }

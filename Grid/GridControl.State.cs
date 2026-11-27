@@ -184,6 +184,8 @@ public partial class GridControl<TValue>
             _visibilityOverrides.Clear();
             _headerOverrides.Clear();
             _groupDescriptors.Clear();
+            _runtimePageWidth = null;
+            _runtimeWidthMode = null;
             foreach (var column in EffectiveColumns)
             {
                 column.RuntimeWidth = null;
@@ -476,7 +478,8 @@ public partial class GridControl<TValue>
         HeaderOverrides = settings.HeaderOverrides == null
             ? null
             : new Dictionary<string, string>(settings.HeaderOverrides, StringComparer.OrdinalIgnoreCase),
-        GroupColumns = settings.GroupColumns?.ToList()
+        GroupColumns = settings.GroupColumns?.ToList(),
+        PageWidth = settings.PageWidth
     };
 
     private async Task NotifyGridStateChangedAsync(GridStateChangeKind changeKind)

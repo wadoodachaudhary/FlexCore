@@ -40,6 +40,25 @@ public sealed partial class CrystalFormula
                             value = new("(" + DesignerSqlPredicate(value) + " " + step.Op.ToUpperInvariant() + " " + DesignerSqlPredicate(right) + ")", new(CrystalBaseType.Boolean), true);
                             continue;
                         }
+                        if (step.Op == "in" && step.Right is RangeNode range && !value.Predicate && !value.Type.IsArray && !value.Type.IsRange)
+                        {
+                            var bounds = new List<string>();
+                            if (range.Start is { } startNode)
+                            {
+                                var start = Emit(startNode, depth + 1);
+                                if (start.Predicate || start.Type.IsArray || start.Type.IsRange || !Numeric(value.Type) || !Numeric(start.Type)) throw Unsupported();
+                                bounds.Add(value.Sql + (range.IncludeStart ? " >= " : " > ") + start.Sql);
+                            }
+                            if (range.End is { } endNode)
+                            {
+                                var end = Emit(endNode, depth + 1);
+                                if (end.Predicate || end.Type.IsArray || end.Type.IsRange || !Numeric(value.Type) || !Numeric(end.Type)) throw Unsupported();
+                                bounds.Add(value.Sql + (range.IncludeEnd ? " <= " : " < ") + end.Sql);
+                            }
+                            if (bounds.Count == 0) throw Unsupported();
+                            value = new("(" + string.Join(" AND ", bounds) + ")", new(CrystalBaseType.Boolean), true);
+                            continue;
+                        }
                         if (step.Op is "=" or "<>" or "!=" or "<" or ">" or "<=" or ">=")
                         {
                             if (value.Predicate || right.Predicate || value.Type.IsRange || right.Type.IsRange

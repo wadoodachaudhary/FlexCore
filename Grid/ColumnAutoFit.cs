@@ -198,6 +198,153 @@ internal static class ColumnAutoFit
         return changes;
     }
 
+    /// <summary>Page Width: combines content best fit with bounded proportional scaling
+    /// (increasing when best-fit columns leave spare room, decreasing when they exceed the
+    /// container) so all visible columns fit <paramref name="available"/>.</summary>
+    public static List<ColumnWidthChange> ComputePageWidth(
+        IReadOnlyList<ColumnAutoFitTarget> targets, IReadOnlyDictionary<string, double>? measured,
+        double available, double gridMin, double gridMax, double ceilingPx, double widthScale = 1)
+    {
+        var changes = new List<ColumnWidthChange>();
+        if (targets.Count == 0 || available <= 0)
+            return changes;
+
+        var pinnedWidth = 0d;
+        var scalableIndices = new List<int>(targets.Count);
+        for (var i = 0; i < targets.Count; i++)
+        {
+            if (targets[i].AllowAutoFit)
+            {
+                scalableIndices.Add(i);
+            }
+            else
+            {
+                var cur = targets[i].CurrentWidth;
+                pinnedWidth += cur > 0 ? cur : FallbackWidthPx;
+            }
+        }
+
+        var count = scalableIndices.Count;
+        if (count == 0)
+            return changes;
+
+        var targetTotal = Math.Max(0d, Math.Round(available - pinnedWidth));
+        var scale = double.IsFinite(widthScale) && widthScale >= 1 ? widthScale : 1;
+        var basis = new double[count];
+        var mins = new double[count];
+        var maxs = new double[count];
+
+        for (var k = 0; k < count; k++)
+        {
+            var target = targets[scalableIndices[k]];
+            var content = measured != null
+                          && target.Field.Length > 0
+                          && measured.TryGetValue(target.Field, out var px)
+                          && px > 0
+                ? px
+                : EstimateWidth(target.HeaderText, target.SampleTexts?.Invoke(), target.IsNumeric);
+
+            var (rawMin, basisMax) = ResolveBounds(target.MinWidth, target.MaxWidth, gridMin, gridMax, ceilingPx);
+            var min = Math.Max(1d, Math.Round(rawMin));
+            var explicitMax = TryParseWidthPx(target.MaxWidth) ?? (gridMax > 0 ? gridMax : (double?)null);
+            var max = explicitMax.HasValue
+                ? Math.Max(min, Math.Round(explicitMax.Value))
+                : Math.Max(min, Math.Round(Math.Max(basisMax, targetTotal)));
+
+            mins[k] = min;
+            maxs[k] = max;
+            basis[k] = Math.Clamp(content * scale, min, Math.Max(min, basisMax));
+        }
+
+        var widths = new double[count];
+        var sumMin = mins.Sum();
+        var sumMax = maxs.Sum();
+        if (targetTotal <= sumMin)
+        {
+            Array.Copy(mins, widths, count);
+        }
+        else if (targetTotal >= sumMax)
+        {
+            Array.Copy(maxs, widths, count);
+        }
+        else
+        {
+            var locked = new bool[count];
+            var remaining = targetTotal;
+            while (true)
+            {
+                var freeBasis = 0d;
+                var freeCount = 0;
+                for (var k = 0; k < count; k++)
+                {
+                    if (locked[k]) continue;
+                    freeBasis += basis[k];
+                    freeCount++;
+                }
+                if (freeCount == 0)
+                    break;
+
+                var factor = freeBasis > 0 ? remaining / freeBasis : 1d;
+                var clamped = false;
+                for (var k = 0; k < count; k++)
+                {
+                    if (locked[k]) continue;
+                    var raw = freeBasis > 0 ? basis[k] * factor : remaining / freeCount;
+                    if (raw < mins[k] - 1e-6)
+                    {
+                        widths[k] = mins[k];
+                        locked[k] = true;
+                        remaining -= mins[k];
+                        clamped = true;
+                    }
+                    else if (raw > maxs[k] + 1e-6)
+                    {
+                        widths[k] = maxs[k];
+                        locked[k] = true;
+                        remaining -= maxs[k];
+                        clamped = true;
+                    }
+                }
+
+                if (!clamped)
+                {
+                    var lastFree = -1;
+                    for (var k = 0; k < count; k++)
+                        if (!locked[k]) lastFree = k;
+
+                    var assigned = 0d;
+                    for (var k = 0; k < count; k++)
+                    {
+                        if (locked[k]) continue;
+                        if (k == lastFree)
+                        {
+                            widths[k] = Math.Clamp(Math.Round(remaining - assigned), mins[k], maxs[k]);
+                        }
+                        else
+                        {
+                            var w = Math.Clamp(
+                                Math.Round(freeBasis > 0 ? basis[k] * factor : remaining / freeCount),
+                                mins[k], maxs[k]);
+                            widths[k] = w;
+                            assigned += w;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        for (var k = 0; k < count; k++)
+        {
+            var idx = scalableIndices[k];
+            var target = targets[idx];
+            var width = widths[k];
+            if (Math.Abs(target.CurrentWidth - width) >= 0.5)
+                changes.Add(new ColumnWidthChange(idx, target.Field, target.CurrentWidth, width));
+        }
+        return changes;
+    }
+
     /// <summary>Inline style of the table for a width mode. FitColumns keeps every column at
     /// its own width, so the table may end short of the container (slack after the last
     /// column) or run past it (horizontal scrollbar); FillAvailable stretches to the container
@@ -225,6 +372,7 @@ internal sealed class ColumnAutoFitTarget
     public double CurrentWidth { get; init; }
     public string? MinWidth { get; init; }
     public string? MaxWidth { get; init; }
+    public bool AllowAutoFit { get; init; } = true;
     public bool IsNumeric { get; init; }
     public Func<IEnumerable<string?>>? SampleTexts { get; init; }
 }

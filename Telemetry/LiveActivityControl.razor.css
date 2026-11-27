@@ -1,0 +1,175 @@
+.fx-live-root {
+    --fx-live-bg: #ece9d8;
+    --fx-live-panel: #f7f6f0;
+    --fx-live-border: #aca899;
+    --fx-live-text: #000000;
+    --fx-live-muted: #4a4a4a;
+    --fx-live-accent: #0a246a;
+    --fx-live-warn: #9c1c1c;
+    --fx-live-slow: #fff3cd;
+    --fx-live-failed: #f8d7da;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+    min-height: 0;
+    padding: 6px;
+    box-sizing: border-box;
+    background: var(--fx-live-bg);
+    color: var(--fx-live-text);
+    font-family: Tahoma, "Segoe UI", sans-serif;
+    font-size: 12px;
+}
+
+.fx-live-root.fx-live-theme-dark {
+    --fx-live-bg: #111217;
+    --fx-live-panel: #181b1f;
+    --fx-live-border: #2c3235;
+    --fx-live-text: #d8d9da;
+    --fx-live-muted: #9aa0a6;
+    --fx-live-accent: #38bdf8;
+    --fx-live-warn: #fb7185;
+    --fx-live-slow: #4a3b10;
+    --fx-live-failed: #4c1d24;
+}
+
+.fx-live-root.fx-live-theme-light {
+    --fx-live-bg: #f4f6f8;
+    --fx-live-panel: #ffffff;
+    --fx-live-border: #d0d7de;
+    --fx-live-text: #1f2328;
+    --fx-live-muted: #59636e;
+    --fx-live-accent: #0284c7;
+    --fx-live-warn: #be123c;
+}
+
+.fx-live-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.fx-live-bar-inner {
+    margin-bottom: 6px;
+}
+
+.fx-live-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--fx-live-accent);
+}
+
+.fx-live-spacer {
+    flex: 1 1 auto;
+}
+
+.fx-live-label {
+    font-weight: 700;
+    margin-left: 8px;
+}
+
+.fx-live-muted {
+    color: var(--fx-live-muted);
+}
+
+.fx-live-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 2px;
+}
+
+.fx-live-section {
+    font-weight: 700;
+    color: var(--fx-live-accent);
+    border-bottom: 1px solid var(--fx-live-border);
+    padding: 4px 0 2px;
+    flex: 0 0 auto;
+}
+
+.fx-live-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.fx-live-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.fx-live-grids {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.fx-live-kpi-label {
+    font-weight: 700;
+    color: var(--fx-live-muted);
+}
+
+.fx-live-kpi-value {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--fx-live-accent);
+}
+
+.fx-live-kpi-value.fx-live-warn {
+    color: var(--fx-live-warn);
+}
+
+.fx-live-kpi-sub {
+    color: var(--fx-live-muted);
+    font-size: 11px;
+}
+
+.fx-live-empty {
+    color: var(--fx-live-muted);
+    padding: 12px 4px;
+}
+
+.fx-live-root ::deep .fx-card.fx-live-card {
+    background: var(--fx-live-panel);
+    color: var(--fx-live-text);
+    border: 1px solid var(--fx-live-border);
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.fx-live-root ::deep .fx-card.fx-live-card .fx-card-title {
+    color: var(--fx-live-accent);
+    font-weight: 700;
+    font-size: 12px;
+}
+
+.fx-live-root ::deep .fx-live-pill {
+    min-height: 22px;
+    padding: 1px 10px;
+    font-size: 12px;
+}
+
+.fx-live-root ::deep .fx-live-pill-active {
+    font-weight: 700;
+    color: var(--fx-live-accent);
+    background: #dfe8f6;
+    border-color: var(--fx-live-accent);
+}
+
+.fx-live-root ::deep tr.fx-live-row-slow > td {
+    background: var(--fx-live-slow);
+}
+
+.fx-live-root ::deep tr.fx-live-row-failed > td {
+    background: var(--fx-live-failed);
+}

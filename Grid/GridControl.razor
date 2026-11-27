@@ -1189,14 +1189,14 @@
                         else
                         {
                             <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="top">
-                                <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(providerStart * _rowHeightPx)"></td>
+                                <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(GetTopSpacerHeight(providerStart, providerTotal))"></td>
                             </tr>
                             @for (int pi = 0; pi < providerItems.Count; pi++)
                             {
                                 @rowTemplate((providerItems[pi], providerStart + pi))
                             }
                             <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="bottom">
-                                <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(Math.Max(0, providerTotal - providerEnd) * _rowHeightPx)"></td>
+                                <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(GetBottomSpacerHeight(providerEnd, providerTotal))"></td>
                             </tr>
                         }
                     }
@@ -1209,7 +1209,7 @@
 
                         @* TOP spacer — height of all rows above the window. *@
                         <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="top">
-                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(GetTopSpacerHeight(winStart, winTotal))"></td>
                         </tr>
                         @for (int wi = winStart; wi < winEnd; wi++)
                         {
@@ -1217,7 +1217,7 @@
                         }
                         @* BOTTOM spacer — height of all rows below the window. *@
                         <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="bottom">
-                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(GetBottomSpacerHeight(winEnd, winTotal))"></td>
                         </tr>
                     }
                     else
@@ -2044,6 +2044,13 @@
                             @onclick="HeaderMenuBestFitToGrid">
                         <span class="fx-grid-header-context-check"></span>
                         Best Fit to Grid
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            role="menuitemcheckbox"
+                            aria-checked="@(IsPageWidth ? "true" : "false")"
+                            @onclick="HeaderMenuTogglePageWidth">
+                        <span class="fx-grid-header-context-check">@(IsPageWidth ? "✓" : "")</span>
+                        Page Width
                     </button>
                 }
 
