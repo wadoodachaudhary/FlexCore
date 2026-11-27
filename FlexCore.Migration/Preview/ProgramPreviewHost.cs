@@ -37,10 +37,11 @@ internal sealed class ProgramPreviewHost : IProgramPreviewHost, IDisposable
             return Reject(ProgramPreviewStatus.Failed, ex.Message);
         }
 
-        var kind = Resolve(launch.Kind);
+        var offscreen = OffscreenPreview.Use(launch, Capability.CanRunGui, OperatingSystem.IsMacOS());
+        var kind = Resolve(launch.Kind, offscreen);
         if (kind is null)
             return Reject(ProgramPreviewStatus.Unavailable, Capability.Message);
-        if (kind == ProgramPreviewKind.Gui && !Capability.CanRunGui)
+        if (kind == ProgramPreviewKind.Gui && !Capability.CanRunGui && !offscreen)
             return Reject(ProgramPreviewStatus.Unavailable, Capability.Message);
 
         var owner = CleanOwner(ownerKey);
@@ -189,12 +190,12 @@ internal sealed class ProgramPreviewHost : IProgramPreviewHost, IDisposable
         catch (OperationCanceledException) { }
     }
 
-    private ProgramPreviewKind? Resolve(ProgramPreviewKind kind) => kind switch
+    private ProgramPreviewKind? Resolve(ProgramPreviewKind kind, bool offscreen) => kind switch
     {
         ProgramPreviewKind.Console => ProgramPreviewKind.Console,
         ProgramPreviewKind.Gui => ProgramPreviewKind.Gui,
         ProgramPreviewKind.Web => ProgramPreviewKind.Web,
-        _ => Capability.CanRunGui ? ProgramPreviewKind.Gui : null
+        _ => offscreen || Capability.CanRunGui ? ProgramPreviewKind.Gui : null
     };
 
     private bool WithinLimits(string? owner, PreviewSession? except)

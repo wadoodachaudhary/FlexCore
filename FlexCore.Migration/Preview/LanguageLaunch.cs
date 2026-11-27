@@ -6,7 +6,7 @@ namespace Fx.ControlKit.Preview;
 /// </summary>
 public static class LanguageLaunch
 {
-    public static ProgramLaunch JavaSources(string workingDirectory, string mainClass, IReadOnlyList<string> relativeSources)
+    public static ProgramLaunch JavaSources(string workingDirectory, string mainClass, IReadOnlyList<string> relativeSources, bool offscreen = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mainClass);
         if (relativeSources is null || relativeSources.Count == 0)
@@ -23,12 +23,15 @@ public static class LanguageLaunch
             "fi",
             "mkdir -p .preview-classes",
             "\"$JAVAC\" -encoding UTF-8 -d .preview-classes " + files,
+            "if [ \"${FLEXCORE_PREVIEW:-}\" = offscreen ]; then",
+            "  exec \"$JAVA\" -Djava.awt.headless=true -cp .preview-classes " + mainClass,
+            "fi",
             "exec \"$JAVA\" -cp .preview-classes " + mainClass
         ]);
-        return Shell(workingDirectory, script, mainClass, ProgramPreviewKind.Gui, null);
+        return Shell(workingDirectory, script, mainClass, ProgramPreviewKind.Gui, null, offscreen);
     }
 
-    public static ProgramLaunch PythonScript(string workingDirectory, string relativeScript, string requiredModule, ProgramPreviewKind kind = ProgramPreviewKind.Gui)
+    public static ProgramLaunch PythonScript(string workingDirectory, string relativeScript, string requiredModule, ProgramPreviewKind kind = ProgramPreviewKind.Gui, bool offscreen = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativeScript);
         ArgumentException.ThrowIfNullOrWhiteSpace(requiredModule);
@@ -54,7 +57,7 @@ public static class LanguageLaunch
         var userSite = UserSitePackages();
         if (!string.IsNullOrWhiteSpace(userSite))
             environment = new Dictionary<string, string?> { ["PYTHONPATH"] = userSite };
-        return Shell(workingDirectory, script, relativeScript, kind, environment);
+        return Shell(workingDirectory, script, relativeScript, kind, environment, offscreen);
     }
 
     /// <summary>The current user's site-packages, or null when Python cannot be asked.</summary>
@@ -82,7 +85,7 @@ public static class LanguageLaunch
         }
     }
 
-    private static ProgramLaunch Shell(string workingDirectory, string script, string label, ProgramPreviewKind kind, IReadOnlyDictionary<string, string?>? environment)
+    private static ProgramLaunch Shell(string workingDirectory, string script, string label, ProgramPreviewKind kind, IReadOnlyDictionary<string, string?>? environment, bool offscreen)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
             throw new ArgumentException("WorkingDirectory must exist.", nameof(workingDirectory));
@@ -93,7 +96,8 @@ public static class LanguageLaunch
             WorkingDirectory = workingDirectory,
             Kind = kind,
             Label = label,
-            Environment = environment
+            Environment = environment,
+            Offscreen = offscreen
         };
         launch.Validate();
         return launch;

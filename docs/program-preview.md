@@ -292,6 +292,12 @@ A pane with `Content` set is drawn in the group and is not started as a process.
 
 `LanguageLaunch.JavaSources` compiles the named sources with `javac` and runs `java`. `LanguageLaunch.PythonScript` runs `python3` after checking that a module imports. Both use the server `PATH`. If the tool is missing, the process prints an install note and exits.
 
+## Offscreen painting on macOS
+
+A launch with `Offscreen = true` paints without Xvfb when the host is macOS, or when `xvfb` and `xdotool` are not installed. Linux keeps the virtual display when those tools exist. No Screen Recording permission and no extra package are required: Java paints a headless `BufferedImage`, and Qt uses the `offscreen` platform plugin that ships with Qt.
+
+The host sets `FLEXCORE_PREVIEW=offscreen` and `FLEXCORE_PREVIEW_FRAME` to a file path. The program writes an `FCFR` frame (width, height, packed RGB24) and reads stdin lines: `move`, `down`, `up`, `wheel`, `key`, and `text`. Pointer coordinates are pixels in that frame. Set `FLEXCORE_PREVIEW_FORCE_OFFSCREEN=1` to exercise this path on a machine that also has Xvfb.
+
 ## Try the harness
 
 `tests/FlexCore.PreviewHarness` is a Blazor Server page that hosts `ConverterShell` in Run / Preview with two small Tk windows, plus a group that mixes a GUI program, a console program, and a local web server. It is a facility check, not a product sample. The page maps the frame route and the web app route.

@@ -73,6 +73,7 @@ internal static class PreviewFacilityChecks
             var python = LanguageLaunch.PythonScript(javaDir, "quote_window.py", "PySide6");
             check(python.Arguments.Any(arg => arg.Contains("PySide6", StringComparison.Ordinal) && arg.Contains("quote_window.py", StringComparison.Ordinal)), "a Python launch checks the toolkit then runs the script");
             check(python.Environment != null && python.Environment.TryGetValue("PYTHONPATH", out var site) && Directory.Exists(site), "a Python launch keeps the user site packages after the preview replaces HOME");
+            check(LanguageLaunch.JavaSources(javaDir, "quote.QuoteFrame", ["src/main/java/quote/QuoteFrame.java"], offscreen: true).Offscreen, "a Java desktop launch can opt into offscreen painting");
 
             await renderer.Dispatcher.InvokeAsync(async () =>
             {
