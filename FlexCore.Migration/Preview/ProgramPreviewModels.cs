@@ -146,7 +146,7 @@ public sealed class ProgramLaunch
 public sealed class ProgramPreviewOptions
 {
     public int MaxConcurrentSessions { get; set; } = 8;
-    public int MaxSessionsPerOwner { get; set; } = 4;
+    public int MaxSessionsPerOwner { get; set; } = 8;
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(10);
     public TimeSpan MaxLifetime { get; set; } = TimeSpan.FromMinutes(30);
     public TimeSpan FrameInterval { get; set; } = TimeSpan.FromMilliseconds(200);

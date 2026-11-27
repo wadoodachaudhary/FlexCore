@@ -15,7 +15,7 @@ builder.Services.AddFlexCoreProgramPreview(options =>
 {
     options.FrameRoutePrefix = ProgramPreviewHttp.DefaultRoutePrefix;
     options.MaxConcurrentSessions = 8;
-    options.MaxSessionsPerOwner = 4;
+    options.MaxSessionsPerOwner = 8; // default. Quote (2) and Customer Desk (3) fit together.
     options.IdleTimeout = TimeSpan.FromMinutes(10);
     options.MaxLifetime = TimeSpan.FromMinutes(30);
     options.DisplayWidth = 800;
